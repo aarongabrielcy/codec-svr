@@ -43,7 +43,7 @@ func handleConnection(conn net.Conn) {
 		}
 
 		data := buffer[:n]
-		fmt.Printf("📦 Received %d bytes from %s\n", n, conn.RemoteAddr())
+		fmt.Printf("Received %d bytes from %s\n", n, conn.RemoteAddr())
 		dispatcher.ProcessIncoming(conn, data)
 	}
 }
