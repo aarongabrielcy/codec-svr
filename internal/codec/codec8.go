@@ -6,6 +6,14 @@ import (
 	"fmt"
 )
 
+// safeRead previene panic si el offset excede el tamaño del buffer.
+func safeRead(data []byte, offset, length int) ([]byte, error) {
+	if offset+length > len(data) {
+		return nil, fmt.Errorf("buffer overflow: tried to read %d bytes at offset %d (len=%d)", length, offset, len(data))
+	}
+	return data[offset : offset+length], nil
+}
+
 func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	result := make(map[string]interface{})
 
@@ -13,7 +21,7 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("data too short to be valid Codec8E packet")
 	}
 
-	// Verificar preámbulo
+	// --- Preamble ---
 	if data[0] != 0x00 || data[1] != 0x00 || data[2] != 0x00 || data[3] != 0x00 {
 		return nil, fmt.Errorf("invalid preamble (expected 0x00000000)")
 	}
@@ -26,34 +34,33 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	result["codec_id"] = fmt.Sprintf("0x%X", codecID)
 	result["number_of_data"] = numberOfData
 
-	offset := 10 // Primer registro
+	offset := 10
 
-	if len(data) < offset+30 {
-		return result, fmt.Errorf("data too short for AVL record")
+	// --- Timestamp ---
+	ts, err := safeRead(data, offset, 8)
+	if err != nil {
+		return result, err
 	}
-
-	// Timestamp
-	timestamp := binary.BigEndian.Uint64(data[offset : offset+8])
+	timestamp := binary.BigEndian.Uint64(ts)
 	offset += 8
 
+	if len(data) < offset+15 {
+		return result, fmt.Errorf("data too short for AVL record header")
+	}
+
 	priority := data[offset]
-	offset += 1
+	offset++
 
 	longitude := int32(binary.BigEndian.Uint32(data[offset : offset+4]))
 	offset += 4
-
 	latitude := int32(binary.BigEndian.Uint32(data[offset : offset+4]))
 	offset += 4
-
 	altitude := binary.BigEndian.Uint16(data[offset : offset+2])
 	offset += 2
-
 	angle := binary.BigEndian.Uint16(data[offset : offset+2])
 	offset += 2
-
 	satellites := data[offset]
-	offset += 1
-
+	offset++
 	speed := binary.BigEndian.Uint16(data[offset : offset+2])
 	offset += 2
 
@@ -67,8 +74,8 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	result["speed_kph"] = speed
 
 	// --- IO Elements ---
-	if len(data) < offset+2 {
-		return result, fmt.Errorf("data too short for IO elements")
+	if len(data) <= offset+2 {
+		return result, fmt.Errorf("data too short for IO header")
 	}
 
 	eventIO := data[offset]
@@ -80,49 +87,48 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 
 	ioValues := make(map[uint8]interface{})
 
-	// Parse 1-byte IOs
-	oneByteCount := int(data[offset])
-	offset++
-	for i := 0; i < oneByteCount; i++ {
-		id := data[offset]
-		val := data[offset+1]
-		ioValues[id] = val
-		offset += 2
+	// Helper inline para leer cada grupo
+	readGroup := func(size int) error {
+		count := int(data[offset])
+		offset++
+		for i := 0; i < count; i++ {
+			if offset+1+size > len(data) {
+				return fmt.Errorf("IO section exceeds buffer at id index %d (offset=%d, len=%d)", i, offset, len(data))
+			}
+			id := data[offset]
+			valBytes := data[offset+1 : offset+1+size]
+			offset += 1 + size
+
+			switch size {
+			case 1:
+				ioValues[id] = valBytes[0]
+			case 2:
+				ioValues[id] = binary.BigEndian.Uint16(valBytes)
+			case 4:
+				ioValues[id] = binary.BigEndian.Uint32(valBytes)
+			case 8:
+				ioValues[id] = binary.BigEndian.Uint64(valBytes)
+			}
+		}
+		return nil
 	}
 
-	// Parse 2-byte IOs
-	twoByteCount := int(data[offset])
-	offset++
-	for i := 0; i < twoByteCount; i++ {
-		id := data[offset]
-		val := binary.BigEndian.Uint16(data[offset+1 : offset+3])
-		ioValues[id] = val
-		offset += 3
+	if err := readGroup(1); err != nil {
+		return result, err
 	}
-
-	// Parse 4-byte IOs
-	fourByteCount := int(data[offset])
-	offset++
-	for i := 0; i < fourByteCount; i++ {
-		id := data[offset]
-		val := binary.BigEndian.Uint32(data[offset+1 : offset+5])
-		ioValues[id] = val
-		offset += 5
+	if err := readGroup(2); err != nil {
+		return result, err
 	}
-
-	// Parse 8-byte IOs
-	eightByteCount := int(data[offset])
-	offset++
-	for i := 0; i < eightByteCount; i++ {
-		id := data[offset]
-		val := binary.BigEndian.Uint64(data[offset+1 : offset+9])
-		ioValues[id] = val
-		offset += 9
+	if err := readGroup(4); err != nil {
+		return result, err
+	}
+	if err := readGroup(8); err != nil {
+		return result, err
 	}
 
 	result["io_elements"] = ioValues
 
-	// Mapeamos algunos IO importantes
+	// --- Campos importantes ---
 	if v, ok := ioValues[239]; ok {
 		result["ignition"] = v
 	}
@@ -133,8 +139,12 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 		result["external_voltage_mv"] = v
 	}
 
-	result["raw_remaining"] = hex.EncodeToString(data[offset:])
+	if offset < len(data) {
+		result["raw_remaining"] = hex.EncodeToString(data[offset:])
+	}
 
-	fmt.Printf("\033[32m[INFO]\033[0m Parsed data: %+v\n", result)
+	fmt.Printf("\033[32m[INFO]\033[0m Parsed data OK → Lat: %.6f, Lon: %.6f, Ign: %v, Batt: %v%%, ExtVolt: %vmV\n",
+		result["latitude"], result["longitude"], result["ignition"], result["battery_level"], result["external_voltage_mv"])
+
 	return result, nil
 }
