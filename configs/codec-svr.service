@@ -1,0 +1,18 @@
+[Unit]
+Description=codec-svr Teltonika TCP gateway
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/srv/codec-svr
+ExecStart=/srv/codec-svr/codec-svr
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+Environment=TCP_PORT=8001
+Environment=METRICS_PORT=9000
+Environment=GRPC_SERVER=localhost:50051
+Environment=REDIS_ADDR=localhost:6379
+
+[Install]
+WantedBy=multi-user.target

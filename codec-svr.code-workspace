@@ -1,0 +1,15 @@
+{
+  "folders": [
+    {
+      "path": "."
+    }
+  ],
+  "settings": {
+    "go.toolsEnvVars": {
+      "GOPATH": "${workspaceFolder}"
+    },
+    "gopls": {
+      "build.experimentalWorkspaceModule": true
+    }
+  }
+}

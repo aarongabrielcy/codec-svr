@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package forwarder;
+
+// LÍNEA CLAVE
+option go_package = "./proto;forwarder";
+
+service Forwarder {
+  rpc SendData (DataRequest) returns (DataResponse);
+}
+
+message DataRequest {
+  string device_id = 1;
+  string payload = 2;
+}
+
+message DataResponse {
+  bool success = 1;
+}

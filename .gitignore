@@ -1,0 +1,30 @@
+# Go build artifacts
+/bin/
+/build/
+/dist/
+/codec-svr
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+
+# Dependencies
+vendor/
+
+# Logs
+*.log
+
+# Binaries
+*.exe
+*.dll
+*.so
+
+# Coverage
+coverage.out
+
+# Env files
+.env
