@@ -1,29 +1,25 @@
 package dispatcher
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net"
-	"sync"
+
+	"codec-svr/internal/codec"
 )
 
-var connections = struct {
-	sync.RWMutex
-	data map[string]net.Conn
-}{data: make(map[string]net.Conn)}
+func ProcessIncoming(conn net.Conn, data []byte) {
+	// Mostrar datos crudos
+	rawHex := hex.EncodeToString(data)
+	fmt.Printf("🔹 RAW HEX (%d bytes): %s\n", len(data), rawHex)
 
-func Register(imei string, conn net.Conn) {
-	connections.Lock()
-	connections.data[imei] = conn
-	connections.Unlock()
-}
-
-func SendCommand(imei string, cmd []byte) error {
-	connections.RLock()
-	conn, ok := connections.data[imei]
-	connections.RUnlock()
-	if !ok {
-		return fmt.Errorf("device %s not connected", imei)
+	// Parse básico (en futuro codec8)
+	parsed, err := codec.ParseCodec8E(data)
+	if err != nil {
+		fmt.Println("error parsing data:", err)
+		return
 	}
-	_, err := conn.Write(cmd)
-	return err
+
+	// Imprimir resultado simulado (JSON provisional)
+	fmt.Printf("🧩 Parsed data: %+v\n", parsed)
 }
