@@ -6,7 +6,6 @@ import (
 	"fmt"
 )
 
-// safeRead previene panic si el offset excede el tamaño del buffer.
 func safeRead(data []byte, offset, length int) ([]byte, error) {
 	if offset+length > len(data) {
 		return nil, fmt.Errorf("buffer overflow: tried to read %d bytes at offset %d (len=%d)", length, offset, len(data))
@@ -35,8 +34,9 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	result["number_of_data"] = numberOfData
 
 	offset := 10
+	fmt.Printf("[DEBUG] Start parsing AVL: codec=0x%X, records=%d, total_len=%d\n", codecID, numberOfData, len(data))
 
-	// --- Timestamp ---
+	// Timestamp
 	ts, err := safeRead(data, offset, 8)
 	if err != nil {
 		return result, err
@@ -45,7 +45,7 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	offset += 8
 
 	if len(data) < offset+15 {
-		return result, fmt.Errorf("data too short for AVL record header")
+		return result, fmt.Errorf("data too short for AVL record header (offset=%d)", offset)
 	}
 
 	priority := data[offset]
@@ -73,9 +73,10 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	result["satellites"] = satellites
 	result["speed_kph"] = speed
 
-	// --- IO Elements ---
+	fmt.Printf("[DEBUG] GPS parsed: lat=%.6f, lon=%.6f, alt=%d, sats=%d\n", result["latitude"], result["longitude"], altitude, satellites)
+
 	if len(data) <= offset+2 {
-		return result, fmt.Errorf("data too short for IO header")
+		return result, fmt.Errorf("data too short for IO header (offset=%d)", offset)
 	}
 
 	eventIO := data[offset]
@@ -87,10 +88,14 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 
 	ioValues := make(map[uint8]interface{})
 
-	// Helper inline para leer cada grupo
 	readGroup := func(size int) error {
+		if offset >= len(data) {
+			return fmt.Errorf("unexpected EOF at offset %d", offset)
+		}
 		count := int(data[offset])
 		offset++
+		fmt.Printf("[DEBUG] IO group %dB: count=%d (offset=%d)\n", size, count, offset)
+
 		for i := 0; i < count; i++ {
 			if offset+1+size > len(data) {
 				return fmt.Errorf("IO section exceeds buffer at id index %d (offset=%d, len=%d)", i, offset, len(data))
@@ -109,6 +114,7 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 			case 8:
 				ioValues[id] = binary.BigEndian.Uint64(valBytes)
 			}
+			fmt.Printf("[DEBUG] IO id=%d size=%d val=%v (offset=%d)\n", id, size, ioValues[id], offset)
 		}
 		return nil
 	}
@@ -128,7 +134,6 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 
 	result["io_elements"] = ioValues
 
-	// --- Campos importantes ---
 	if v, ok := ioValues[239]; ok {
 		result["ignition"] = v
 	}
@@ -143,7 +148,7 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 		result["raw_remaining"] = hex.EncodeToString(data[offset:])
 	}
 
-	fmt.Printf("\033[32m[INFO]\033[0m Parsed data OK → Lat: %.6f, Lon: %.6f, Ign: %v, Batt: %v%%, ExtVolt: %vmV\n",
+	fmt.Printf("\033[32m[INFO]\033[0m Parsed data OK → Lat: %.6f, Lon: %.6f, Ign: %v, Batt: %v, ExtVolt: %v\n",
 		result["latitude"], result["longitude"], result["ignition"], result["battery_level"], result["external_voltage_mv"])
 
 	return result, nil
