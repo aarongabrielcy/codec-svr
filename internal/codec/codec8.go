@@ -92,16 +92,8 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 		if offset >= len(data) {
 			return fmt.Errorf("unexpected EOF at offset %d", offset)
 		}
-
 		count := int(data[offset])
 		offset++
-
-		// --- Protección: conteo sospechoso ---
-		if count > 20 { // Teltonika normalmente tiene menos de 10-15 IOs por grupo
-			fmt.Printf("\033[33m[WARN]\033[0m suspicious %dB IO count=%d (offset=%d) → ajustando a 0 para evitar overflow\n", size, count, offset)
-			count = 0
-		}
-
 		fmt.Printf("[DEBUG] IO group %dB: count=%d (offset=%d)\n", size, count, offset)
 
 		for i := 0; i < count; i++ {
