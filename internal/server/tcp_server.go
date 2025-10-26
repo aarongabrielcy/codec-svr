@@ -1,78 +1,147 @@
-package tcp
+package server
 
 import (
-	"bufio"
-	"encoding/hex"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
-	"codec-svr/internal/codec"
 	"codec-svr/internal/dispatcher"
+	"codec-svr/internal/utilities"
 )
 
+// Estructura principal del servidor
+type TcpServer struct{}
+
+var (
+	activeConnections sync.Map // IMEI -> net.Conn
+)
+
+// 🔹 NUEVO: función Start() compatible con tu main.go
 func Start(addr string, handler func(net.Conn)) error {
-	ln, err := net.Listen("tcp", addr)
+	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		return err
+		return fmt.Errorf("error starting TCP server: %w", err)
 	}
-	defer ln.Close()
-	fmt.Println("TCP server listening on", addr)
+	defer listener.Close()
+
+	log.Printf("[INFO] TCP Server listening on %s", addr)
+
+	srv := &TcpServer{}
 
 	for {
-		conn, err := ln.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
-			fmt.Println("accept error:", err)
+			log.Printf("[ERROR] accept error: %v", err)
 			continue
 		}
-		conn.SetDeadline(time.Now().Add(5 * time.Minute))
-		go handleConnection(conn)
+
+		go func(c net.Conn) {
+			handler(c)              // callback del main.go
+			srv.HandleConnection(c) // manejo interno (IMEI, AVL, etc.)
+		}(conn)
 	}
 }
 
-func handleConnection(conn net.Conn) {
+// Maneja una conexión TCP entrante
+func (srv *TcpServer) HandleConnection(conn net.Conn) {
 	defer conn.Close()
-	fmt.Println("New connection from:", conn.RemoteAddr())
 
-	reader := bufio.NewReader(conn)
-	buf := make([]byte, 1024)
+	var deviceIMEI string
+	defer func() {
+		if deviceIMEI != "" {
+			activeConnections.Delete(deviceIMEI)
+			log.Printf("[INFO] Dispositivo desconectado: %s", deviceIMEI)
+		}
+	}()
+
+	err := SetTCPOptions(conn)
+	if err != nil {
+		log.Println("TCP options error: ", err)
+	}
+
+	netData := make([]byte, 2048)
 
 	for {
-		n, err := reader.Read(buf)
+		lenBytes, err := conn.Read(netData)
 		if err != nil {
-			fmt.Println("connection closed or read error:", err)
-			return
+			if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
+				continue
+			} else if err != io.EOF {
+				fmt.Println("Read error: ", err.Error())
+				break
+			} else if err == io.EOF {
+				break
+			}
 		}
 
-		data := buf[:n]
-		fmt.Printf("Received %d bytes from %s\n", n, conn.RemoteAddr())
-		fmt.Printf("[WARN] RAW HEX (%d bytes): %s\n", n, strings.ToUpper(hex.EncodeToString(data)))
-
-		// Si son 17 bytes y los primeros dos son longitud → es IMEI handshake
-		if n == 17 && data[0] == 0x00 && data[1] == 0x0F {
-			imei := string(data[2:17])
-			fmt.Printf("\033[36m[HANDSHAKE]\033[0m IMEI detected: %s\n", imei)
-			// ACK al dispositivo
-			conn.Write([]byte{0x01})
-			dispatcher.Register(imei, conn)
+		if lenBytes == 0 {
 			continue
 		}
 
-		// Si es paquete con preámbulo 0x00000000 → es AVL Data
-		if len(data) > 8 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x00 {
-			fmt.Println("\033[33m[AVL]\033[0m Codec8E data packet detected")
+		message := strings.TrimSpace(string(netData[:lenBytes]))
+		data := netData[:lenBytes]
 
-			parsed, err := codec.ParseCodec8E(data)
-			if err != nil {
-				fmt.Printf("[ERROR] parsing data: %v\n", err)
+		utilities.CreateLog("ALLTRACKINGS", message)
+
+		// 🔹 Si aún no tenemos IMEI registrado, lo procesamos
+		if deviceIMEI == "" && isIMEIMessage(message) {
+			deviceIMEI = extractIMEI(message)
+			if deviceIMEI != "" {
+				activeConnections.Store(deviceIMEI, conn)
+				log.Printf("[INFO] Nuevo dispositivo conectado: %s", deviceIMEI)
+				_, _ = conn.Write([]byte{0x01}) // ACK
 			} else {
-				fmt.Printf("[INFO] Parsed AVL OK: %+v\n", parsed)
+				log.Printf("[WARN] IMEI inválido recibido desde %s", conn.RemoteAddr())
+				conn.Write([]byte{0x00})
+				conn.Close()
+				return
 			}
 			continue
 		}
 
-		// Si no es ninguno, solo muestra el contenido
-		fmt.Println("[INFO] Unrecognized packet type, raw data logged.")
+		// 🔹 Procesar datos AVL
+		go dispatcher.ProcessIncoming(conn, data)
+	}
+}
+
+// Detecta si el mensaje es un IMEI (inicio de conexión)
+func isIMEIMessage(data string) bool {
+	data = strings.TrimSpace(data)
+	return len(data) >= 15 && strings.IndexFunc(data, func(r rune) bool {
+		return r < '0' || r > '9'
+	}) == -1
+}
+
+// Extrae el IMEI de la cadena
+func extractIMEI(data string) string {
+	data = strings.TrimSpace(data)
+	if len(data) >= 15 {
+		return data[len(data)-15:]
+	}
+	return ""
+}
+
+func SetTCPOptions(conn net.Conn) error {
+	switch conn := conn.(type) {
+	case *net.TCPConn:
+		if err := conn.SetLinger(0); err != nil {
+			return err
+		}
+		if err := conn.SetNoDelay(false); err != nil {
+			return err
+		}
+		if err := conn.SetKeepAlive(true); err != nil {
+			return err
+		}
+		if err := conn.SetKeepAlivePeriod(60 * time.Second); err != nil {
+			return err
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown connection type %T", conn)
 	}
 }
