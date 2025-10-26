@@ -5,22 +5,14 @@ import (
 	"io"
 	"log"
 	"net"
-	"strings"
-	"sync"
 	"time"
 
 	"codec-svr/internal/dispatcher"
 	"codec-svr/internal/utilities"
 )
 
-// Estructura principal del servidor
 type TcpServer struct{}
 
-var (
-	activeConnections sync.Map // IMEI -> net.Conn
-)
-
-// 🔹 NUEVO: función Start() compatible con tu main.go
 func Start(addr string, handler func(net.Conn)) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -40,108 +32,78 @@ func Start(addr string, handler func(net.Conn)) error {
 		}
 
 		go func(c net.Conn) {
-			handler(c)              // callback del main.go
-			srv.HandleConnection(c) // manejo interno (IMEI, AVL, etc.)
+			// callback (como antes desde main.go)
+			if handler != nil {
+				handler(c)
+			}
+			// y el processing real por conexión
+			srv.HandleConnection(c)
 		}(conn)
 	}
 }
 
-// Maneja una conexión TCP entrante
+var activeConnections = make(map[string]net.Conn)
+
 func (srv *TcpServer) HandleConnection(conn net.Conn) {
 	defer conn.Close()
 
 	var deviceIMEI string
 	defer func() {
 		if deviceIMEI != "" {
-			activeConnections.Delete(deviceIMEI)
+			delete(activeConnections, deviceIMEI)
 			log.Printf("[INFO] Dispositivo desconectado: %s", deviceIMEI)
 		}
 	}()
 
-	err := SetTCPOptions(conn)
-	if err != nil {
-		log.Println("TCP options error: ", err)
+	// configuraciones TCP (si quieres mantenerlo)
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		_ = tcpConn.SetLinger(0)
+		_ = tcpConn.SetNoDelay(false)
+		_ = tcpConn.SetKeepAlive(true)
+		_ = tcpConn.SetKeepAlivePeriod(60 * time.Second)
 	}
 
-	netData := make([]byte, 2048)
-
+	buffer := make([]byte, 2048)
 	for {
-		lenBytes, err := conn.Read(netData)
+		n, err := conn.Read(buffer)
 		if err != nil {
 			if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
 				continue
-			} else if err != io.EOF {
-				fmt.Println("Read error: ", err.Error())
-				break
-			} else if err == io.EOF {
-				break
 			}
-		}
-
-		if lenBytes == 0 {
-			continue
-		}
-
-		message := strings.TrimSpace(string(netData[:lenBytes]))
-		data := netData[:lenBytes]
-
-		utilities.CreateLog("ALLTRACKINGS", message)
-
-		// 🔹 Si aún no tenemos IMEI registrado, lo procesamos
-		if deviceIMEI == "" && isIMEIMessage(message) {
-			deviceIMEI = extractIMEI(message)
-			if deviceIMEI != "" {
-				activeConnections.Store(deviceIMEI, conn)
-				log.Printf("[INFO] Nuevo dispositivo conectado: %s", deviceIMEI)
-				_, _ = conn.Write([]byte{0x01}) // ACK
-			} else {
-				log.Printf("[WARN] IMEI inválido recibido desde %s", conn.RemoteAddr())
-				conn.Write([]byte{0x00})
-				conn.Close()
+			if err == io.EOF {
 				return
 			}
+			log.Printf("[ERROR] read error: %v", err)
+			return
+		}
+		if n == 0 {
 			continue
 		}
 
-		// 🔹 Procesar datos AVL
-		go dispatcher.ProcessIncoming(conn, data)
-	}
-}
+		data := make([]byte, n)
+		copy(data, buffer[:n])
 
-// Detecta si el mensaje es un IMEI (inicio de conexión)
-func isIMEIMessage(data string) bool {
-	data = strings.TrimSpace(data)
-	return len(data) >= 15 && strings.IndexFunc(data, func(r rune) bool {
-		return r < '0' || r > '9'
-	}) == -1
-}
+		// Registrar raw en archivo si quieres
+		utilities.CreateLog("ALLTRACKINGS", string(data))
 
-// Extrae el IMEI de la cadena
-func extractIMEI(data string) string {
-	data = strings.TrimSpace(data)
-	if len(data) >= 15 {
-		return data[len(data)-15:]
-	}
-	return ""
-}
+		// Detectar IMEI binario: 17 bytes, primeros 2 indican longitud (0x00 0x0F)
+		if deviceIMEI == "" && n == 17 && data[0] == 0x00 && data[1] == 0x0F {
+			imei := string(data[2:17])
+			deviceIMEI = imei
+			activeConnections[imei] = conn
+			log.Printf("[HANDSHAKE] IMEI detected: %s from %s", imei, conn.RemoteAddr())
+			_, _ = conn.Write([]byte{0x01}) // ACK
+			continue
+		}
 
-func SetTCPOptions(conn net.Conn) error {
-	switch conn := conn.(type) {
-	case *net.TCPConn:
-		if err := conn.SetLinger(0); err != nil {
-			return err
+		// Si no hay IMEI aún y esto no es IMEI, evitar parsear
+		if deviceIMEI == "" {
+			// evitar intentar parsear packets sin IMEI: log y continuar
+			log.Printf("[WARN] packet received before IMEI registration (%d bytes) from %s", n, conn.RemoteAddr())
+			continue
 		}
-		if err := conn.SetNoDelay(false); err != nil {
-			return err
-		}
-		if err := conn.SetKeepAlive(true); err != nil {
-			return err
-		}
-		if err := conn.SetKeepAlivePeriod(60 * time.Second); err != nil {
-			return err
-		}
-		return nil
-	default:
-		return fmt.Errorf("unknown connection type %T", conn)
+
+		// Llamar al dispatcher pasando explicitamente el IMEI
+		go dispatcher.ProcessIncoming(deviceIMEI, data)
 	}
 }

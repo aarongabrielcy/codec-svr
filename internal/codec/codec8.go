@@ -7,255 +7,154 @@ import (
 	"time"
 )
 
-// ParseCodec8E parses a full TCP frame that contains a single Codec 8 Extended (0x8E) AVL block.
-// It expects the packet starting at preamble (4x00), then data length, then codec, etc.
+// safeRead previene panic si el offset excede el tamaño del buffer.
+func safeRead(data []byte, offset, length int) ([]byte, error) {
+	if offset+length > len(data) {
+		return nil, fmt.Errorf("buffer overflow: tried to read %d bytes at offset %d (len=%d)", length, offset, len(data))
+	}
+	return data[offset : offset+length], nil
+}
+
 func ParseCodec8E(data []byte) (map[string]interface{}, error) {
-	var off int
-	// Basic safety
-	if len(data) < 4+4+1+1+8+1 {
+	result := make(map[string]interface{})
+
+	if len(data) < 15 {
 		return nil, fmt.Errorf("packet too short: %d", len(data))
 	}
-	// Skip preamble
-	off += 4
-	// Data length
-	dataLen := int(binary.BigEndian.Uint32(data[off : off+4]))
-	off += 4
-	if off+dataLen+4 > len(data) {
-		return nil, fmt.Errorf("declared data length %d exceeds buffer (off=%d, len=%d)", dataLen, off, len(data))
-	}
-	codec := data[off]
-	off++
-	if codec != 0x8E {
-		return nil, fmt.Errorf("unexpected codec 0x%X (expected 0x8E)", codec)
-	}
-	n1 := int(data[off])
-	off++
-	if n1 <= 0 {
-		return nil, fmt.Errorf("no AVL records (n1=%d)", n1)
+
+	// Preamble
+	if data[0] != 0x00 || data[1] != 0x00 || data[2] != 0x00 || data[3] != 0x00 {
+		return nil, fmt.Errorf("invalid preamble (expected 0x00000000)")
 	}
 
-	// Only one record is typical; parse the first
-	// Timestamp (8)
-	tsms := binary.BigEndian.Uint64(data[off : off+8])
-	off += 8
-	priority := data[off]
-	off++
+	dataFieldLength := binary.BigEndian.Uint32(data[4:8])
+	codecID := data[8]
+	numberOfData := int(data[9])
 
-	// GPS 15 bytes
-	lon := int32(binary.BigEndian.Uint32(data[off : off+4]))
-	off += 4
-	lat := int32(binary.BigEndian.Uint32(data[off : off+4]))
-	off += 4
-	altitude := binary.BigEndian.Uint16(data[off : off+2])
-	off += 2
-	angle := binary.BigEndian.Uint16(data[off : off+2])
-	off += 2
-	sats := data[off]
-	off++
-	speed := binary.BigEndian.Uint16(data[off : off+2])
-	off += 2
+	result["data_field_length"] = dataFieldLength
+	result["codec_id"] = fmt.Sprintf("0x%X", codecID)
+	result["records"] = numberOfData
 
-	// IO header (all 2-byte in 8E)
-	eventID := binary.BigEndian.Uint16(data[off : off+2])
-	off += 2
-	totalIO := int(binary.BigEndian.Uint16(data[off : off+2]))
-	off += 2
-
-	// Groups
-	readU16 := func() (uint16, error) {
-		if off+2 > len(data) {
-			return 0, fmt.Errorf("buffer overflow on u16 at off=%d", off)
-		}
-		v := binary.BigEndian.Uint16(data[off : off+2])
-		off += 2
-		return v, nil
-	}
-	readU32 := func() (uint32, error) {
-		if off+4 > len(data) {
-			return 0, fmt.Errorf("buffer overflow on u32 at off=%d", off)
-		}
-		v := binary.BigEndian.Uint32(data[off : off+4])
-		off += 4
-		return v, nil
-	}
-	readU64 := func() (uint64, error) {
-		if off+8 > len(data) {
-			return 0, fmt.Errorf("buffer overflow on u64 at off=%d", off)
-		}
-		v := binary.BigEndian.Uint64(data[off : off+8])
-		off += 8
-		return v, nil
-	}
-	readU8 := func() (uint8, error) {
-		if off+1 > len(data) {
-			return 0, fmt.Errorf("buffer overflow on u8 at off=%d", off)
-		}
-		v := data[off]
-		off++
-		return v, nil
-	}
-
-	type item struct {
-		size int
-		val  uint64
-	}
-	ioValues := map[uint16]item{}
-
-	// 1-byte group (count is 2 bytes, each id is 2 bytes, values are 1 byte)
-	n1b, err := readU16()
+	offset := 10
+	// Timestamp
+	ts, err := safeRead(data, offset, 8)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
-	for i := 0; i < int(n1b); i++ {
-		id, err := readU16()
-		if err != nil {
-			return nil, err
-		}
-		v, err := readU8()
-		if err != nil {
-			return nil, err
-		}
-		ioValues[id] = item{1, uint64(v)}
+	timestamp := binary.BigEndian.Uint64(ts)
+	offset += 8
+
+	// header minimum check for GPS fields
+	if len(data) < offset+15 {
+		return result, fmt.Errorf("data too short for AVL record header (offset=%d, len=%d)", offset, len(data))
 	}
 
-	// 2-byte group
-	n2b, err := readU16()
-	if err != nil {
-		return nil, err
+	priority := data[offset]
+	offset++
+
+	longitude := int32(binary.BigEndian.Uint32(data[offset : offset+4]))
+	offset += 4
+	latitude := int32(binary.BigEndian.Uint32(data[offset : offset+4]))
+	offset += 4
+	altitude := binary.BigEndian.Uint16(data[offset : offset+2])
+	offset += 2
+	angle := binary.BigEndian.Uint16(data[offset : offset+2])
+	offset += 2
+	satellites := data[offset]
+	offset++
+	speed := binary.BigEndian.Uint16(data[offset : offset+2])
+	offset += 2
+
+	result["timestamp_ms"] = timestamp
+	result["priority"] = priority
+	result["longitude"] = float64(longitude) / 10000000
+	result["latitude"] = float64(latitude) / 10000000
+	result["altitude"] = altitude
+	result["angle"] = angle
+	result["satellites"] = satellites
+	result["speed_kph"] = speed
+
+	// IO header: eventIO + totalIO
+	if len(data) <= offset+2 {
+		return result, fmt.Errorf("data too short for IO header (offset=%d)", offset)
 	}
-	for i := 0; i < int(n2b); i++ {
-		id, err := readU16()
-		if err != nil {
-			return nil, err
+	eventIO := data[offset]
+	totalIO := data[offset+1]
+	offset += 2
+
+	result["event_io_id"] = eventIO
+	result["io_total"] = totalIO
+
+	// Build ioElements as map[int]map[string]interface{}
+	ioElements := make(map[int]map[string]interface{})
+
+	// helper to read group of IOs and store into ioElements
+	readGroup := func(size int) error {
+		if offset >= len(data) {
+			return fmt.Errorf("unexpected EOF at offset %d", offset)
 		}
-		v, err := readU16()
-		if err != nil {
-			return nil, err
+		count := int(data[offset])
+		offset++
+		// sanity cap (avoid bogus counts)
+		if count > 50 {
+			// sospechoso -> limitar
+			count = 0
 		}
-		ioValues[id] = item{2, uint64(v)}
+		for i := 0; i < count; i++ {
+			if offset+1+size > len(data) {
+				return fmt.Errorf("IO section exceeds buffer at id index %d (offset=%d, len=%d)", i, offset, len(data))
+			}
+			id := int(data[offset])
+			valBytes := data[offset+1 : offset+1+size]
+			offset += 1 + size
+
+			var val interface{}
+			switch size {
+			case 1:
+				val = int(valBytes[0])
+			case 2:
+				val = int(binary.BigEndian.Uint16(valBytes))
+			case 4:
+				val = int(binary.BigEndian.Uint32(valBytes))
+			case 8:
+				val = int(binary.BigEndian.Uint64(valBytes))
+			}
+
+			ioElements[id] = map[string]interface{}{
+				"size": size,
+				"val":  val,
+			}
+		}
+		return nil
 	}
 
-	// 4-byte group
-	n4b, err := readU16()
-	if err != nil {
-		return nil, err
+	// Parse groups 1B,2B,4B,8B
+	if err := readGroup(1); err != nil {
+		return result, err
 	}
-	for i := 0; i < int(n4b); i++ {
-		id, err := readU16()
-		if err != nil {
-			return nil, err
-		}
-		v, err := readU32()
-		if err != nil {
-			return nil, err
-		}
-		ioValues[id] = item{4, uint64(v)}
+	if err := readGroup(2); err != nil {
+		return result, err
+	}
+	if err := readGroup(4); err != nil {
+		return result, err
+	}
+	if err := readGroup(8); err != nil {
+		return result, err
 	}
 
-	// 8-byte group
-	n8b, err := readU16()
-	if err != nil {
-		return nil, err
-	}
-	for i := 0; i < int(n8b); i++ {
-		id, err := readU16()
-		if err != nil {
-			return nil, err
-		}
-		v, err := readU64()
-		if err != nil {
-			return nil, err
-		}
-		ioValues[id] = item{8, uint64(v)}
+	result["io"] = ioElements
+
+	// remaining raw (crc etc)
+	if offset < len(data) {
+		result["raw_remaining"] = hex.EncodeToString(data[offset:])
+	} else {
+		result["raw_remaining"] = ""
 	}
 
-	// X-bytes group
-	nxb, err := readU16()
-	if err != nil {
-		return nil, err
-	}
-	for i := 0; i < int(nxb); i++ {
-		id, err := readU16()
-		if err != nil {
-			return nil, err
-		}
-		length, err := readU16()
-		if err != nil {
-			return nil, err
-		}
-		if off+int(length) > len(data) {
-			return nil, fmt.Errorf("buffer overflow on X-bytes payload id=%d", id)
-		}
-		// We do not interpret variable-length payloads here; skip
-		off += int(length)
-		ioValues[id] = item{int(length), 0}
-	}
-
-	// Number of Data 2 and CRC
-	n2 := int(data[off])
-	off++
-	if n2 != n1 {
-		return nil, fmt.Errorf("n2 (%d) != n1 (%d)", n2, n1)
-	}
-	// 4 bytes CRC (the last 2 are IBM CRC)
-	if off+4 > len(data) {
-		return nil, fmt.Errorf("missing CRC")
-	}
-	crc := hex.EncodeToString(data[off : off+4])
-	off += 4
-
-	// Build result
-	result := map[string]interface{}{
-		"codec_id":     int(codec),
-		"records":      n1,
-		"timestamp_ms": int64(tsms),
-		"timestamp":    time.UnixMilli(int64(tsms)).UTC().Format(time.RFC3339),
-		"priority":     int(priority),
-		"longitude":    float64(lon) / 1e7,
-		"latitude":     float64(lat) / 1e7,
-		"altitude":     int(altitude),
-		"angle":        int(angle),
-		"satellites":   int(sats),
-		"speed":        int(speed),
-		"event_io_id":  int(eventID),
-		"io_total":     totalIO,
-		"crc":          crc,
-	}
-
-	// Flatten some known IDs for FMC125
-	// GSM Signal = ID 21 (1B), External Voltage = ID 66 (2B)
-	if v, ok := ioValues[21]; ok {
-		result["gsm_signal"] = v.val
-	}
-	if v, ok := ioValues[66]; ok {
-		result["external_voltage_mv"] = v.val
-	}
-	if v, ok := ioValues[239]; ok {
-		result["io_239"] = v.val
-	}
-	if v, ok := ioValues[240]; ok {
-		result["io_240"] = v.val
-	}
-
-	// Include raw IO map
-	pretty := map[string]map[string]uint64{}
-	for id, it := range ioValues {
-		key := fmt.Sprintf("%d", id)
-		pretty[key] = map[string]uint64{
-			"size": uint64(it.size),
-			"val":  it.val,
-		}
-	}
-	result["io"] = pretty
-
-	fmt.Printf("[DEBUG] GPS parsed: lat=%.6f, lon=%.6f, alt=%d, sats=%d\n",
-		result["latitude"], result["longitude"], result["altitude"], result["satellites"])
-
-	fmt.Printf("[DEBUG] IO 1B count=%d, 2B count=%d, 4B count=%d, 8B count=%d, XB count=%d\n",
-		n1b, n2b, n4b, n8b, nxb)
-
-	fmt.Printf("\033[32m[INFO]\033[0m Parsed data OK → ts=%s prio=%d ExtVolt(mV)=%v GSM=%v\n",
-		result["timestamp"], result["priority"], result["external_voltage_mv"], result["gsm_signal"])
+	// Debug print
+	t := time.UnixMilli(int64(timestamp))
+	fmt.Printf("\033[32m[INFO]\033[0m Parsed data OK → ts=%s prio=%d ExtVolt(mV)=%v GSM=?\n",
+		t.UTC().Format(time.RFC3339), priority, ioElements[66])
 
 	return result, nil
 }
