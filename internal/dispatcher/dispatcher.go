@@ -3,94 +3,91 @@ package dispatcher
 import (
 	"encoding/hex"
 	"fmt"
-	"net"
-	"sync"
+	"runtime/debug"
+	"time"
 
 	"codec-svr/internal/codec"
 	"codec-svr/internal/store"
 )
 
+// previousStates guarda últimos valores por imei -> key -> int
 var previousStates = make(map[string]map[string]int)
 
-// --- Mapa global de dispositivos conectados ---
-var (
-	deviceRegistry = make(map[string]net.Conn)
-	registryLock   sync.Mutex
-)
+// ProcessIncoming ahora recibe imei explícito junto con el payload
+func ProcessIncoming(imei string, data []byte) {
+	// Protección contra panic dentro del goroutine
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("[PANIC RECOVER] %v\n%s\n", r, string(debug.Stack()))
+		}
+	}()
 
-// Register almacena el IMEI y la conexión TCP asociada
-func Register(imei string, conn net.Conn) {
-	registryLock.Lock()
-	defer registryLock.Unlock()
-
-	deviceRegistry[imei] = conn
-	fmt.Printf("\033[36m[REGISTER]\033[0m Device IMEI=%s registered (%s)\n", imei, conn.RemoteAddr())
-}
-
-// Unregister elimina la conexión asociada a un IMEI (opcional, para limpieza)
-func Unregister(imei string) {
-	registryLock.Lock()
-	defer registryLock.Unlock()
-
-	if _, exists := deviceRegistry[imei]; exists {
-		delete(deviceRegistry, imei)
-		fmt.Printf("\033[35m[UNREGISTER]\033[0m Device IMEI=%s removed from registry\n", imei)
-	}
-}
-
-// ProcessIncoming maneja los datos AVL entrantes
-func ProcessIncoming(conn net.Conn, data []byte) {
 	rawHex := hex.EncodeToString(data)
 	fmt.Printf("\033[33m[WARN]\033[0m RAW HEX (%d bytes): %s\n", len(data), rawHex)
 
 	parsed, err := codec.ParseCodec8E(data)
 	if err != nil {
-		fmt.Printf("\033[31m[ERROR]\033[0m error parsing data: %v\n", err)
+		fmt.Printf("[ERROR] error parsing data: %v\n", err)
 		return
 	}
+
 	fmt.Printf("[INFO] Parsed AVL OK: %+v\n", parsed)
 
-	// 🔹 Obtener valores clave
-	io := parsed["io"].(map[int]map[string]any)
-	imei := fmt.Sprintf("%v", parsed["imei"])
-
-	ign := safeIOVal(io, 239)
-	bat := safeIOVal(io, 113)
-	extVolt := safeIOVal(io, 66)
-	out1 := safeIOVal(io, 240)
-	out2 := safeIOVal(io, 237)
-
-	fmt.Printf("[STATE] IMEI:%s Ign:%d Batt:%d%% ExtVolt:%d Out1:%d Out2:%d\n", imei, ign, bat, extVolt, out1, out2)
-	// 🔹 Detectar cambios de estado
-	updateIfChanged(imei, "ign", ign)
-	updateIfChanged(imei, "out1", out1)
-	updateIfChanged(imei, "out2", out2)
-	updateIfChanged(imei, "bat", bat)
-	// Mostrar los datos relevantes
-	fmt.Printf("\033[32m[INFO]\033[0m Parsed data → Lat: %.6f, Lon: %.6f, Ign: %v, Batt: %v, ExtVolt: %v\n",
-		parsed["latitude"], parsed["longitude"], parsed["ignition"], parsed["battery_level"], parsed["external_voltage_mv"])
-
-	// (en futuro aquí podemos enviar por gRPC, guardar en DB, etc.)
-}
-
-func safeIOVal(io map[int]map[string]any, id int) int {
-	if v, ok := io[id]; ok {
-		if val, ok := v["val"].(int); ok {
-			return val
-		}
+	// Obtener io map con type-assertion segura
+	rawIO, ok := parsed["io"]
+	if !ok {
+		fmt.Println("[WARN] no IO elements found in parsed data")
+		return
 	}
-	return 0
+
+	ioMap, ok := rawIO.(map[int]map[string]interface{})
+	if !ok {
+		// fallback: try other possible type for safety (avoid panic)
+		fmt.Printf("[ERROR] unexpected 'io' type: %T\n", rawIO)
+		return
+	}
+
+	// Extraer campos de interés
+	getVal := func(id int) int {
+		if v, exists := ioMap[id]; exists {
+			if val, ok := v["val"].(int); ok {
+				return val
+			}
+		}
+		return 0
+	}
+
+	ign := getVal(239)
+	extVolt := getVal(66)   // mV
+	battery := getVal(113)  // battery % (some devices)
+	in1 := getVal(200)      // example input
+	out1 := getVal(237)     // example output
+	movement := getVal(240) // movement
+
+	// Log estado actual
+	fmt.Printf("[STATE] IMEI=%s Ignition=%d Battery=%d ExtVolt=%d In1=%d Out1=%d Move=%d\n",
+		imei, ign, battery, extVolt, in1, out1, movement)
+
+	// Detectar cambios y persistir en Redis temporalmente
+	emitIfChanged(imei, "ign", ign)
+	emitIfChanged(imei, "out1", out1)
+	emitIfChanged(imei, "in1", in1)
+	emitIfChanged(imei, "bat", battery)
+	emitIfChanged(imei, "extvolt", extVolt)
+
+	// En futuro: pipeline.ProcessPacket(parsed) o envío gRPC
+	_ = time.Now()
 }
 
-func updateIfChanged(imei, key string, newVal int) {
+func emitIfChanged(imei, key string, newVal int) {
 	if previousStates[imei] == nil {
 		previousStates[imei] = make(map[string]int)
 	}
 	oldVal := previousStates[imei][key]
 	if oldVal != newVal {
-		fmt.Printf("[EVENT] Cambio detectado %s → %s: %d -> %d\n", imei, key, oldVal, newVal)
+		fmt.Printf("[EVENT] %s %s changed %d -> %d\n", imei, key, oldVal, newVal)
 		previousStates[imei][key] = newVal
-		// 🔹 Guardar evento en Redis
-		store.SaveEventRedis(fmt.Sprintf("%s:%s", imei, key), newVal)
+		// Guardar en Redis (clave por ejemplo: state:<imei>:<key>)
+		store.SaveEventRedis(fmt.Sprintf("state:%s:%s", imei, key), newVal)
 	}
 }
