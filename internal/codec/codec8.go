@@ -77,25 +77,33 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	eventIO := data[offset]
 	totalIO := int(data[offset+1])
 	offset += 2
-
-	// ⚠️ Algunos dispositivos (como FMC125) mandan totalIO=0 aunque haya IOs reales.
-	// Si totalIO == 0, asumimos que sigue directamente el bloque de IOs.
 	if totalIO == 0 {
 		fmt.Printf("[WARN] totalIO=0 (FMC125 workaround enabled) → trying fallback parser...\n")
+
 		ioElements := make(map[int]map[string]interface{})
 
-		// Leer grupos manualmente: 1B, 2B, 4B, 8B, XB
+		if offset >= len(data) {
+			return result, fmt.Errorf("data too short for FMC125 fallback")
+		}
+
 		groupSizes := []int{1, 2, 4, 8}
+
 		for _, size := range groupSizes {
 			if offset >= len(data) {
 				break
 			}
+
 			count := int(data[offset])
 			offset++
+			if count == 0 {
+				continue
+			}
+
 			for i := 0; i < count; i++ {
 				if offset+1+size > len(data) {
 					break
 				}
+
 				id := int(data[offset])
 				valBytes := data[offset+1 : offset+1+size]
 				offset += 1 + size
@@ -116,10 +124,12 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 					"size": size,
 					"val":  val,
 				}
+
+				fmt.Printf("[DEBUG] IO %dB → ID=%d VAL=%d\n", size, id, val)
 			}
 		}
 
-		// Grupo X (id, size, value)
+		// grupo extendido X (variable size)
 		if offset < len(data) {
 			countX := int(data[offset])
 			offset++
@@ -135,17 +145,20 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 				}
 				valBytes := data[offset : offset+size]
 				offset += size
-				val := binary.BigEndian.Uint32(append(make([]byte, 4-len(valBytes)), valBytes...))
+
+				val := int(binary.BigEndian.Uint32(append(make([]byte, 4-len(valBytes)), valBytes...)))
 				ioElements[id] = map[string]interface{}{
 					"size": size,
-					"val":  int(val),
+					"val":  val,
 				}
+				fmt.Printf("[DEBUG] IO XB → ID=%d VAL=%d\n", id, val)
 			}
 		}
 
 		result["event_io_id"] = eventIO
 		result["io_total"] = len(ioElements)
 		result["io"] = ioElements
+
 	} else {
 		// ← fallback al parser normal (si el equipo sí usa totalIO > 0)
 		ioElements := make(map[int]map[string]interface{})
