@@ -13,7 +13,6 @@ import (
 var previousStates = make(map[string]map[string]int)
 
 func ProcessIncoming(imei string, data []byte) {
-
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Printf("[PANIC RECOVER] %v\n%s\n", r, string(debug.Stack()))
@@ -39,26 +38,17 @@ func ProcessIncoming(imei string, data []byte) {
 
 	ioMap, ok := rawIO.(map[int]map[string]interface{})
 	if !ok {
-
 		fmt.Printf("[ERROR] unexpected 'io' type: %T\n", rawIO)
 		return
 	}
 
-	getVal := func(id int) int {
-		if v, exists := ioMap[id]; exists {
-			if val, ok := v["val"].(int); ok {
-				return val
-			}
-		}
-		return 0
-	}
-
-	ign := getVal(239)
-	extVolt := getVal(66)
-	battery := getVal(113)
-	in1 := getVal(200)
-	out1 := getVal(237)
-	movement := getVal(240)
+	// usar getValAny en lugar de getVal
+	ign := getValAny(ioMap, 239)
+	extVolt := getValAny(ioMap, 66)
+	battery := getValAny(ioMap, 113)
+	in1 := getValAny(ioMap, 200)
+	out1 := getValAny(ioMap, 237)
+	movement := getValAny(ioMap, 240)
 
 	fmt.Printf("[STATE] IMEI=%s Ignition=%d Battery=%d ExtVolt=%d In1=%d Out1=%d Move=%d\n",
 		imei, ign, battery, extVolt, in1, out1, movement)
@@ -70,6 +60,36 @@ func ProcessIncoming(imei string, data []byte) {
 	emitIfChanged(imei, "extvolt", extVolt)
 
 	_ = time.Now()
+}
+
+// función robusta que maneja cualquier tipo numérico del mapa IO
+func getValAny(ioMap map[int]map[string]interface{}, id int) int {
+	if v, exists := ioMap[id]; exists {
+		val := v["val"]
+		switch num := val.(type) {
+		case int:
+			return num
+		case int32:
+			return int(num)
+		case int64:
+			return int(num)
+		case float32:
+			return int(num)
+		case float64:
+			return int(num)
+		case uint8:
+			return int(num)
+		case uint16:
+			return int(num)
+		case uint32:
+			return int(num)
+		case uint64:
+			return int(num)
+		default:
+			fmt.Printf("[WARN] unexpected type for IO[%d]: %T → %v\n", id, val, val)
+		}
+	}
+	return 0
 }
 
 func emitIfChanged(imei, key string, newVal int) {
