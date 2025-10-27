@@ -90,7 +90,6 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	// Contenedor de IO elements
 	ioElements := make(map[int]map[string]interface{})
 
-	// Helper para grupos de IO
 	readGroup := func(size int) error {
 		if offset >= len(data) {
 			return fmt.Errorf("unexpected EOF at offset %d", offset)
@@ -98,16 +97,24 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 		count := int(data[offset])
 		offset++
 
-		// Protección básica
+		// Protección de límite
 		if count > 50 {
 			count = 0
+		}
+		// Si no hay bytes suficientes para todos los elementos, truncar
+		remaining := len(data) - offset
+		expected := count * (1 + size)
+		if expected > remaining {
+			// Truncar de forma segura
+			count = remaining / (1 + size)
+			fmt.Printf("[WARN] Truncating IO group: expected=%d available=%d adjustedCount=%d\n", expected, remaining, count)
 		}
 
 		for i := 0; i < count; i++ {
 			if offset+1+size > len(data) {
-				return fmt.Errorf("IO section exceeds buffer (offset=%d)", offset)
+				// fin de datos, salir sin error
+				return nil
 			}
-
 			id := int(data[offset])
 			valBytes := data[offset+1 : offset+1+size]
 			offset += 1 + size
@@ -131,7 +138,6 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 		}
 		return nil
 	}
-
 	// Leer grupos
 	if err := readGroup(1); err != nil {
 		return result, err
