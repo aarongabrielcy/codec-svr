@@ -75,10 +75,25 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	if len(data) <= offset+2 {
 		return result, fmt.Errorf("data too short for IO header (offset=%d)", offset)
 	}
+	/*eventIO := data[offset]
+	totalIO := int(data[offset+1])
+	offset += 2*/
+	if len(data) <= offset+1 {
+		return result, fmt.Errorf("data too short for IO header (offset=%d)", offset)
+	}
 	eventIO := data[offset]
 	totalIO := int(data[offset+1])
-	offset += 2
 
+	// validación de alineación
+	if totalIO == 0 && len(data) > offset+3 {
+		// parece que nos desfasamos: intenta corregir
+		fmt.Printf("[WARN] totalIO=0 at offset=%d, trying realign...\n", offset)
+		eventIO = data[offset+1]
+		totalIO = int(data[offset+2])
+		offset++ // corrige desplazamiento
+	}
+
+	offset += 2
 	result["event_io_id"] = eventIO
 	result["io_total"] = totalIO
 
