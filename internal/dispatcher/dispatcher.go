@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"runtime/debug"
+	"sort"
 	"time"
 
 	"codec-svr/internal/codec"
@@ -41,15 +42,28 @@ func ProcessIncoming(imei string, data []byte) {
 		fmt.Printf("[ERROR] unexpected 'io' type: %T\n", rawIO)
 		return
 	}
+	// === BLOQUE DE DEPURACIÓN: Mostrar IOs ordenados ===
+	fmt.Println("─────────────────────────────")
+	fmt.Printf("[DEBUG] IO MAP for IMEI %s\n", imei)
+	ids := make([]int, 0, len(ioMap))
+	for id := range ioMap {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	for _, id := range ids {
+		val := ioMap[id]["val"]
+		size := ioMap[id]["size"]
+		fmt.Printf("  • ID=%d (size=%v) → %v\n", id, size, val)
+	}
+	fmt.Println("─────────────────────────────")
+	ign := getValAny(ioMap, 239, 66, 69, 78)      // Ignition
+	battery := getValAny(ioMap, 67, 10, 240, 241) // Internal battery voltage
+	extVolt := getValAny(ioMap, 21, 68, 70, 72)   // External voltage / power supply
+	in1 := getValAny(ioMap, 1, 9, 200)            // Digital input 1
+	out1 := getValAny(ioMap, 179, 178, 237)       // Digital output 1
+	movement := getValAny(ioMap, 240, 181, 182)   // Movement or motion
 
-	// usar getValAny en lugar de getVal
-	ign := getValAny(ioMap, 239)
-	extVolt := getValAny(ioMap, 66)
-	battery := getValAny(ioMap, 113)
-	in1 := getValAny(ioMap, 200)
-	out1 := getValAny(ioMap, 237)
-	movement := getValAny(ioMap, 240)
-
+	fmt.Printf("[DEBUG] IO MAP DUMP: %+v\n", ioMap)
 	fmt.Printf("[STATE] IMEI=%s Ignition=%d Battery=%d ExtVolt=%d In1=%d Out1=%d Move=%d\n",
 		imei, ign, battery, extVolt, in1, out1, movement)
 
@@ -62,31 +76,32 @@ func ProcessIncoming(imei string, data []byte) {
 	_ = time.Now()
 }
 
-// función robusta que maneja cualquier tipo numérico del mapa IO
-func getValAny(ioMap map[int]map[string]interface{}, id int) int {
-	if v, exists := ioMap[id]; exists {
-		val := v["val"]
-		switch num := val.(type) {
-		case int:
-			return num
-		case int32:
-			return int(num)
-		case int64:
-			return int(num)
-		case float32:
-			return int(num)
-		case float64:
-			return int(num)
-		case uint8:
-			return int(num)
-		case uint16:
-			return int(num)
-		case uint32:
-			return int(num)
-		case uint64:
-			return int(num)
-		default:
-			fmt.Printf("[WARN] unexpected type for IO[%d]: %T → %v\n", id, val, val)
+func getValAny(ioMap map[int]map[string]interface{}, ids ...int) int {
+	for _, id := range ids {
+		if v, exists := ioMap[id]; exists {
+			val := v["val"]
+			switch num := val.(type) {
+			case int:
+				return num
+			case int32:
+				return int(num)
+			case int64:
+				return int(num)
+			case float32:
+				return int(num)
+			case float64:
+				return int(num)
+			case uint8:
+				return int(num)
+			case uint16:
+				return int(num)
+			case uint32:
+				return int(num)
+			case uint64:
+				return int(num)
+			default:
+				fmt.Printf("[WARN] unexpected type for IO[%d]: %T → %v\n", id, val, val)
+			}
 		}
 	}
 	return 0
