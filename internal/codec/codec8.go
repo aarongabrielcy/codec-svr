@@ -71,11 +71,12 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	result["satellites"] = satellites
 	result["speed_kph"] = speed
 
+	// IO Header
 	if len(data) <= offset+2 {
 		return result, fmt.Errorf("data too short for IO header (offset=%d)", offset)
 	}
 	eventIO := data[offset]
-	totalIO := data[offset+1]
+	totalIO := int(data[offset+1])
 	offset += 2
 
 	result["event_io_id"] = eventIO
@@ -83,28 +84,45 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 
 	ioElements := make(map[int]map[string]interface{})
 
+	// totalRead lleva la cuenta de IOs leídos en total (debe ser <= totalIO)
+	totalRead := 0
+
+	// Helper para leer grupos (1B,2B,4B,8B)
 	readGroup := func(size int) error {
+		if totalRead >= totalIO {
+			// ya leímos todos los IOs que declararon
+			return nil
+		}
 		if offset >= len(data) {
 			return fmt.Errorf("unexpected EOF at offset %d", offset)
 		}
+
 		count := int(data[offset])
 		offset++
 
-		if count > 50 {
+		// no aceptar counts absurdos (protección)
+		if count > 200 {
 			count = 0
 		}
 
-		remaining := len(data) - offset
-		expected := count * (1 + size)
-		if expected > remaining {
+		// limitar a los elementos que faltan por leer según totalIO
+		remainingElements := totalIO - totalRead
+		if count > remainingElements {
+			// ajustar para no sobrepasar el total declarado
+			count = remainingElements
+		}
 
-			count = remaining / (1 + size)
-			fmt.Printf("[WARN] Truncating IO group: expected=%d available=%d adjustedCount=%d\n", expected, remaining, count)
+		// además limitar por bytes disponibles
+		remainingBytes := len(data) - offset
+		maxPossible := remainingBytes / (1 + size)
+		if count > maxPossible {
+			// reducir si no hay suficientes bytes
+			count = maxPossible
 		}
 
 		for i := 0; i < count; i++ {
 			if offset+1+size > len(data) {
-
+				// no hay suficientes bytes para este elemento → salir sin error
 				return nil
 			}
 			id := int(data[offset])
@@ -127,10 +145,16 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 				"size": size,
 				"val":  val,
 			}
+			totalRead++
+			// si ya alcanzamos totalIO, terminamos el grupo
+			if totalRead >= totalIO {
+				return nil
+			}
 		}
 		return nil
 	}
 
+	// leer los grupos en orden 1,2,4,8
 	if err := readGroup(1); err != nil {
 		return result, err
 	}
@@ -144,17 +168,23 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 		return result, err
 	}
 
-	if offset < len(data) {
-		count := int(data[offset])
+	// Codec8 Extended: grupo X (id + size + value)
+	if totalRead < totalIO && offset < len(data) {
+		// count de elementos XB
+		countX := int(data[offset])
 		offset++
-		for i := 0; i < count; i++ {
+		// Limitar por los que faltan
+		if countX > (totalIO - totalRead) {
+			countX = totalIO - totalRead
+		}
+		for i := 0; i < countX; i++ {
 			if offset+2 > len(data) {
 				break
 			}
 			id := int(data[offset])
 			size := int(data[offset+1])
 			offset += 2
-
+			// si no hay suficientes bytes para el valor, stop
 			if offset+size > len(data) {
 				break
 			}
@@ -174,10 +204,13 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 			default:
 				val = hex.EncodeToString(valBytes)
 			}
-
 			ioElements[id] = map[string]interface{}{
 				"size": size,
 				"val":  val,
+			}
+			totalRead++
+			if totalRead >= totalIO {
+				break
 			}
 		}
 	}
