@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// safeRead previene panic si el offset excede el tamaño del buffer.
 func safeRead(data []byte, offset, length int) ([]byte, error) {
 	if offset+length > len(data) {
 		return nil, fmt.Errorf("buffer overflow: tried to read %d bytes at offset %d (len=%d)", length, offset, len(data))
@@ -14,6 +15,8 @@ func safeRead(data []byte, offset, length int) ([]byte, error) {
 	return data[offset : offset+length], nil
 }
 
+// ParseCodec8E parsea un paquete Codec8 Extended (teltonika).
+// Está diseñado para ser tolerante con equipos FMC125 que a veces envían totalIO==0.
 func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	result := make(map[string]interface{})
 
@@ -21,6 +24,7 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("packet too short: %d", len(data))
 	}
 
+	// Preamble
 	if data[0] != 0x00 || data[1] != 0x00 || data[2] != 0x00 || data[3] != 0x00 {
 		return nil, fmt.Errorf("invalid preamble (expected 0x00000000)")
 	}
@@ -35,16 +39,26 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 
 	offset := 10
 
-	ts, err := safeRead(data, offset, 8)
+	// Timestamp (8 bytes)
+	tsBytes, err := safeRead(data, offset, 8)
 	if err != nil {
 		return result, err
 	}
-	timestamp := binary.BigEndian.Uint64(ts)
+	timestamp := binary.BigEndian.Uint64(tsBytes)
 	offset += 8
 
-	priority := data[offset]
-	offset++
+	// Priority
+	priority, errP := safeRead(data, offset, 1)
+	if errP != nil {
+		return result, errP
+	}
+	result["timestamp_ms"] = timestamp
+	result["priority"] = int(priority[0])
+	// keep numeric priority local too
+	pri := int(priority[0])
+	offset += 1
 
+	// Verificación mínima para campos GPS
 	if len(data) < offset+15 {
 		return result, fmt.Errorf("data too short for GPS record header (offset=%d, len=%d)", offset, len(data))
 	}
@@ -62,8 +76,6 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	speed := binary.BigEndian.Uint16(data[offset : offset+2])
 	offset += 2
 
-	result["timestamp_ms"] = timestamp
-	result["priority"] = priority
 	result["longitude"] = float64(longitude) / 10000000
 	result["latitude"] = float64(latitude) / 10000000
 	result["altitude"] = altitude
@@ -71,39 +83,43 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	result["satellites"] = satellites
 	result["speed_kph"] = speed
 
-	if len(data) <= offset+2 {
+	// IO header (eventIO + totalIO)
+	if len(data) <= offset+1 {
 		return result, fmt.Errorf("data too short for IO header (offset=%d)", offset)
 	}
 	eventIO := data[offset]
 	totalIO := int(data[offset+1])
 	offset += 2
+
+	// Resultado preliminar
+	result["event_io_id"] = eventIO
+	result["io_total"] = totalIO
+
+	// ioElements acumulador
+	ioElements := make(map[int]map[string]interface{})
+
+	// ---------------------------------------------------------
+	// CASE A: totalIO == 0 -> fallback (FMC125 / variant)
+	// ---------------------------------------------------------
 	if totalIO == 0 {
 		fmt.Printf("[WARN] totalIO=0 (FMC125 workaround enabled) → trying fallback parser...\n")
 
-		ioElements := make(map[int]map[string]interface{})
-
-		if offset >= len(data) {
-			return result, fmt.Errorf("data too short for FMC125 fallback")
-		}
-
+		// grupos por tamaño en orden: 1B,2B,4B,8B
 		groupSizes := []int{1, 2, 4, 8}
-
 		for _, size := range groupSizes {
 			if offset >= len(data) {
 				break
 			}
-
 			count := int(data[offset])
 			offset++
 			if count == 0 {
 				continue
 			}
-
 			for i := 0; i < count; i++ {
 				if offset+1+size > len(data) {
+					// no hay suficientes bytes, salir del loop del grupo
 					break
 				}
-
 				id := int(data[offset])
 				valBytes := data[offset+1 : offset+1+size]
 				offset += 1 + size
@@ -119,17 +135,12 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 				case 8:
 					val = int(binary.BigEndian.Uint64(valBytes))
 				}
-
-				ioElements[id] = map[string]interface{}{
-					"size": size,
-					"val":  val,
-				}
-
+				ioElements[id] = map[string]interface{}{"size": size, "val": val}
 				fmt.Printf("[DEBUG] IO %dB → ID=%d VAL=%d\n", size, id, val)
 			}
 		}
 
-		// grupo extendido X (variable size)
+		// grupo extendido X (id + size + value)
 		if offset < len(data) {
 			countX := int(data[offset])
 			offset++
@@ -146,23 +157,39 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 				valBytes := data[offset : offset+size]
 				offset += size
 
-				val := int(binary.BigEndian.Uint32(append(make([]byte, 4-len(valBytes)), valBytes...)))
-				ioElements[id] = map[string]interface{}{
-					"size": size,
-					"val":  val,
+				// convertir valBytes (tamaño variable) a int seguro
+				val := 0
+				switch size {
+				case 1:
+					val = int(valBytes[0])
+				case 2:
+					val = int(binary.BigEndian.Uint16(valBytes))
+				case 4:
+					val = int(binary.BigEndian.Uint32(valBytes))
+				case 8:
+					val = int(binary.BigEndian.Uint64(valBytes))
+				default:
+					// si es un tamaño distinto, intenta leerlo como big-endian (hasta 8 bytes)
+					tmp := make([]byte, 8)
+					copy(tmp[8-len(valBytes):], valBytes)
+					val = int(binary.BigEndian.Uint64(tmp))
 				}
+
+				ioElements[id] = map[string]interface{}{"size": size, "val": val}
 				fmt.Printf("[DEBUG] IO XB → ID=%d VAL=%d\n", id, val)
 			}
 		}
 
-		result["event_io_id"] = eventIO
+		// asignar resultados finales (fallback)
 		result["io_total"] = len(ioElements)
 		result["io"] = ioElements
 
 	} else {
-		// ← fallback al parser normal (si el equipo sí usa totalIO > 0)
-		ioElements := make(map[int]map[string]interface{})
+		// ---------------------------------------------------------
+		// CASE B: totalIO > 0 -> parser estándar Codec8 Extended
+		// ---------------------------------------------------------
 		totalRead := 0
+		// helper para leer grupos: size = 1,2,4,8
 		readGroup := func(size int) error {
 			if totalRead >= totalIO {
 				return nil
@@ -172,6 +199,21 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 			}
 			count := int(data[offset])
 			offset++
+			// proteger contra counts absurdos
+			if count > 200 {
+				count = 0
+			}
+			// limitar por lo que falta leer según totalIO
+			remainingElements := totalIO - totalRead
+			if count > remainingElements {
+				count = remainingElements
+			}
+			// limitar por bytes disponibles
+			remainingBytes := len(data) - offset
+			maxPossible := remainingBytes / (1 + size)
+			if count > maxPossible {
+				count = maxPossible
+			}
 			for i := 0; i < count; i++ {
 				if offset+1+size > len(data) {
 					return nil
@@ -179,6 +221,7 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 				id := int(data[offset])
 				valBytes := data[offset+1 : offset+1+size]
 				offset += 1 + size
+
 				var val int
 				switch size {
 				case 1:
@@ -199,148 +242,69 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 			return nil
 		}
 
-		for _, s := range []int{1, 2, 4, 8} {
-			if err := readGroup(s); err != nil {
-				return result, err
+		// leer los grupos en orden
+		if err := readGroup(1); err != nil {
+			return result, err
+		}
+		if err := readGroup(2); err != nil {
+			return result, err
+		}
+		if err := readGroup(4); err != nil {
+			return result, err
+		}
+		if err := readGroup(8); err != nil {
+			return result, err
+		}
+
+		// grupo X (id + size + value) si aún faltan elementos según totalIO
+		if totalRead < totalIO && offset < len(data) {
+			countX := int(data[offset])
+			offset++
+			if countX > (totalIO - totalRead) {
+				countX = totalIO - totalRead
+			}
+			for i := 0; i < countX; i++ {
+				if offset+2 > len(data) {
+					break
+				}
+				id := int(data[offset])
+				size := int(data[offset+1])
+				offset += 2
+				if offset+size > len(data) {
+					break
+				}
+				valBytes := data[offset : offset+size]
+				offset += size
+
+				var val int
+				switch size {
+				case 1:
+					val = int(valBytes[0])
+				case 2:
+					val = int(binary.BigEndian.Uint16(valBytes))
+				case 4:
+					val = int(binary.BigEndian.Uint32(valBytes))
+				case 8:
+					val = int(binary.BigEndian.Uint64(valBytes))
+				default:
+					tmp := make([]byte, 8)
+					copy(tmp[8-len(valBytes):], valBytes)
+					val = int(binary.BigEndian.Uint64(tmp))
+				}
+				ioElements[id] = map[string]interface{}{"size": size, "val": val}
+				totalRead++
+				if totalRead >= totalIO {
+					break
+				}
 			}
 		}
-		result["event_io_id"] = eventIO
-		result["io_total"] = totalIO
+
+		// asignar resultados finales (parser estándar)
+		result["io_total"] = totalRead
 		result["io"] = ioElements
 	}
-	ioElements := make(map[int]map[string]interface{})
-	// totalRead lleva la cuenta de IOs leídos en total (debe ser <= totalIO)
-	totalRead := 0
-	// Helper para leer grupos (1B,2B,4B,8B)
-	readGroup := func(size int) error {
-		if totalRead >= totalIO {
-			// ya leímos todos los IOs que declararon
-			return nil
-		}
-		if offset >= len(data) {
-			return fmt.Errorf("unexpected EOF at offset %d", offset)
-		}
 
-		count := int(data[offset])
-		offset++
-
-		// no aceptar counts absurdos (protección)
-		if count > 200 {
-			count = 0
-		}
-
-		// limitar a los elementos que faltan por leer según totalIO
-		remainingElements := totalIO - totalRead
-		if count > remainingElements {
-			// ajustar para no sobrepasar el total declarado
-			count = remainingElements
-		}
-
-		// además limitar por bytes disponibles
-		remainingBytes := len(data) - offset
-		maxPossible := remainingBytes / (1 + size)
-		if count > maxPossible {
-			// reducir si no hay suficientes bytes
-			count = maxPossible
-		}
-
-		for i := 0; i < count; i++ {
-			if offset+1+size > len(data) {
-				// no hay suficientes bytes para este elemento → salir sin error
-				return nil
-			}
-			id := int(data[offset])
-			valBytes := data[offset+1 : offset+1+size]
-			offset += 1 + size
-
-			var val interface{}
-			switch size {
-			case 1:
-				val = int(valBytes[0])
-			case 2:
-				val = int(binary.BigEndian.Uint16(valBytes))
-			case 4:
-				val = int(binary.BigEndian.Uint32(valBytes))
-			case 8:
-				val = int(binary.BigEndian.Uint64(valBytes))
-			}
-
-			ioElements[id] = map[string]interface{}{
-				"size": size,
-				"val":  val,
-			}
-			totalRead++
-			// si ya alcanzamos totalIO, terminamos el grupo
-			if totalRead >= totalIO {
-				return nil
-			}
-		}
-		return nil
-	}
-
-	// leer los grupos en orden 1,2,4,8
-	if err := readGroup(1); err != nil {
-		return result, err
-	}
-	if err := readGroup(2); err != nil {
-		return result, err
-	}
-	if err := readGroup(4); err != nil {
-		return result, err
-	}
-	if err := readGroup(8); err != nil {
-		return result, err
-	}
-
-	// Codec8 Extended: grupo X (id + size + value)
-	if totalRead < totalIO && offset < len(data) {
-		// count de elementos XB
-		countX := int(data[offset])
-		offset++
-		// Limitar por los que faltan
-		if countX > (totalIO - totalRead) {
-			countX = totalIO - totalRead
-		}
-		for i := 0; i < countX; i++ {
-			if offset+2 > len(data) {
-				break
-			}
-			id := int(data[offset])
-			size := int(data[offset+1])
-			offset += 2
-			// si no hay suficientes bytes para el valor, stop
-			if offset+size > len(data) {
-				break
-			}
-			valBytes := data[offset : offset+size]
-			offset += size
-
-			var val interface{}
-			switch size {
-			case 1:
-				val = int(valBytes[0])
-			case 2:
-				val = int(binary.BigEndian.Uint16(valBytes))
-			case 4:
-				val = int(binary.BigEndian.Uint32(valBytes))
-			case 8:
-				val = int(binary.BigEndian.Uint64(valBytes))
-			default:
-				val = hex.EncodeToString(valBytes)
-			}
-			ioElements[id] = map[string]interface{}{
-				"size": size,
-				"val":  val,
-			}
-			totalRead++
-			if totalRead >= totalIO {
-				break
-			}
-		}
-	}
-
-	result["io"] = ioElements
-
+	// --- extras: mapear campos útiles ---
 	if ign, ok := ioElements[239]; ok {
 		result["ignition"] = ign["val"]
 	}
@@ -350,22 +314,38 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	if dout1, ok := ioElements[179]; ok {
 		result["digital_output_1"] = dout1["val"]
 	}
+	// ejemplo de voltajes comunes: id 66 (ext battery mv), 113 (battery %/value)
+	if v66, ok := ioElements[66]; ok {
+		result["external_voltage_mv"] = v66["val"]
+	}
+	if v113, ok := ioElements[113]; ok {
+		result["battery_value"] = v113["val"]
+	}
 
+	// CRC (últimos 4 bytes si están presentes)
 	if len(data) >= 4 {
 		crcStart := len(data) - 4
 		crc := binary.BigEndian.Uint32(data[crcStart:])
 		result["crc"] = fmt.Sprintf("%08x", crc)
 	}
+
+	// raw_remaining (hasta CRC)
 	if offset < len(data)-4 {
 		result["raw_remaining"] = hex.EncodeToString(data[offset : len(data)-4])
 	} else {
 		result["raw_remaining"] = ""
 	}
 
+	// Debug: mostrar resumen y contenido final de IOs
 	t := time.UnixMilli(int64(timestamp))
-	fmt.Printf("\033[32m[INFO]\033[0m Parsed data OK → ts=%s prio=%d Ign=%v Din1=%v Dout1=%v\n",
-		t.UTC().Format(time.RFC3339), priority,
-		result["ignition"], result["digital_input_1"], result["digital_output_1"])
+	fmt.Printf("\033[32m[INFO]\033[0m Parsed data OK → ts=%s prio=%d io_count=%d\n",
+		t.UTC().Format(time.RFC3339), pri, len(ioElements))
+	if len(ioElements) > 0 {
+		fmt.Printf("[DEBUG] IO ELEMENTS FINAL (%d):\n", len(ioElements))
+		for id, v := range ioElements {
+			fmt.Printf("   → ID=%d  VAL=%v (size=%v)\n", id, v["val"], v["size"])
+		}
+	}
 
 	return result, nil
 }
