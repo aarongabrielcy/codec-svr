@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// safeRead previene panic si el offset excede el tamaño del buffer.
 func safeRead(data []byte, offset, length int) ([]byte, error) {
 	if offset+length > len(data) {
 		return nil, fmt.Errorf("buffer overflow: tried to read %d bytes at offset %d (len=%d)", length, offset, len(data))
@@ -22,7 +21,6 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("packet too short: %d", len(data))
 	}
 
-	// Preamble (4 bytes)
 	if data[0] != 0x00 || data[1] != 0x00 || data[2] != 0x00 || data[3] != 0x00 {
 		return nil, fmt.Errorf("invalid preamble (expected 0x00000000)")
 	}
@@ -32,12 +30,11 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	numberOfData := int(data[9])
 
 	result["data_field_length"] = dataFieldLength
-	result["codec_id"] = fmt.Sprintf("0x%X", codecID)
+	result["codec_id"] = int(codecID)
 	result["records"] = numberOfData
 
 	offset := 10
 
-	// Timestamp (8 bytes)
 	ts, err := safeRead(data, offset, 8)
 	if err != nil {
 		return result, err
@@ -45,11 +42,9 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	timestamp := binary.BigEndian.Uint64(ts)
 	offset += 8
 
-	// Priority
 	priority := data[offset]
 	offset++
 
-	// GPS data
 	if len(data) < offset+15 {
 		return result, fmt.Errorf("data too short for GPS record header (offset=%d, len=%d)", offset, len(data))
 	}
@@ -76,7 +71,6 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	result["satellites"] = satellites
 	result["speed_kph"] = speed
 
-	// IO Header
 	if len(data) <= offset+2 {
 		return result, fmt.Errorf("data too short for IO header (offset=%d)", offset)
 	}
@@ -87,7 +81,6 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	result["event_io_id"] = eventIO
 	result["io_total"] = totalIO
 
-	// Contenedor de IO elements
 	ioElements := make(map[int]map[string]interface{})
 
 	readGroup := func(size int) error {
@@ -97,22 +90,21 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 		count := int(data[offset])
 		offset++
 
-		// Protección de límite
 		if count > 50 {
 			count = 0
 		}
-		// Si no hay bytes suficientes para todos los elementos, truncar
+
 		remaining := len(data) - offset
 		expected := count * (1 + size)
 		if expected > remaining {
-			// Truncar de forma segura
+
 			count = remaining / (1 + size)
 			fmt.Printf("[WARN] Truncating IO group: expected=%d available=%d adjustedCount=%d\n", expected, remaining, count)
 		}
 
 		for i := 0; i < count; i++ {
 			if offset+1+size > len(data) {
-				// fin de datos, salir sin error
+
 				return nil
 			}
 			id := int(data[offset])
@@ -138,7 +130,7 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 		}
 		return nil
 	}
-	// Leer grupos
+
 	if err := readGroup(1); err != nil {
 		return result, err
 	}
@@ -152,10 +144,47 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 		return result, err
 	}
 
+	if offset < len(data) {
+		count := int(data[offset])
+		offset++
+		for i := 0; i < count; i++ {
+			if offset+2 > len(data) {
+				break
+			}
+			id := int(data[offset])
+			size := int(data[offset+1])
+			offset += 2
+
+			if offset+size > len(data) {
+				break
+			}
+			valBytes := data[offset : offset+size]
+			offset += size
+
+			var val interface{}
+			switch size {
+			case 1:
+				val = int(valBytes[0])
+			case 2:
+				val = int(binary.BigEndian.Uint16(valBytes))
+			case 4:
+				val = int(binary.BigEndian.Uint32(valBytes))
+			case 8:
+				val = int(binary.BigEndian.Uint64(valBytes))
+			default:
+				val = hex.EncodeToString(valBytes)
+			}
+
+			ioElements[id] = map[string]interface{}{
+				"size": size,
+				"val":  val,
+			}
+		}
+	}
+
 	result["io"] = ioElements
 
-	// Detectar campos comunes (ej. ignición, entradas/salidas)
-	if ign, ok := ioElements[239]; ok { // Ejemplo: 239 = Ignición
+	if ign, ok := ioElements[239]; ok {
 		result["ignition"] = ign["val"]
 	}
 	if din1, ok := ioElements[1]; ok {
@@ -165,14 +194,17 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 		result["digital_output_1"] = dout1["val"]
 	}
 
-	// Resto de bytes
-	if offset < len(data) {
-		result["raw_remaining"] = hex.EncodeToString(data[offset:])
+	if len(data) >= 4 {
+		crcStart := len(data) - 4
+		crc := binary.BigEndian.Uint32(data[crcStart:])
+		result["crc"] = fmt.Sprintf("%08x", crc)
+	}
+	if offset < len(data)-4 {
+		result["raw_remaining"] = hex.EncodeToString(data[offset : len(data)-4])
 	} else {
 		result["raw_remaining"] = ""
 	}
 
-	// Log simple
 	t := time.UnixMilli(int64(timestamp))
 	fmt.Printf("\033[32m[INFO]\033[0m Parsed data OK → ts=%s prio=%d Ign=%v Din1=%v Dout1=%v\n",
 		t.UTC().Format(time.RFC3339), priority,

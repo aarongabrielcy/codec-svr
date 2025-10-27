@@ -32,11 +32,11 @@ func Start(addr string, handler func(net.Conn)) error {
 		}
 
 		go func(c net.Conn) {
-			// callback (como antes desde main.go)
+
 			if handler != nil {
 				handler(c)
 			}
-			// y el processing real por conexión
+
 			srv.HandleConnection(c)
 		}(conn)
 	}
@@ -55,7 +55,6 @@ func (srv *TcpServer) HandleConnection(conn net.Conn) {
 		}
 	}()
 
-	// configuraciones TCP (si quieres mantenerlo)
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
 		_ = tcpConn.SetLinger(0)
 		_ = tcpConn.SetNoDelay(false)
@@ -83,27 +82,23 @@ func (srv *TcpServer) HandleConnection(conn net.Conn) {
 		data := make([]byte, n)
 		copy(data, buffer[:n])
 
-		// Registrar raw en archivo si quieres
 		utilities.CreateLog("ALLTRACKINGS", string(data))
 
-		// Detectar IMEI binario: 17 bytes, primeros 2 indican longitud (0x00 0x0F)
 		if deviceIMEI == "" && n == 17 && data[0] == 0x00 && data[1] == 0x0F {
 			imei := string(data[2:17])
 			deviceIMEI = imei
 			activeConnections[imei] = conn
 			log.Printf("[HANDSHAKE] IMEI detected: %s from %s", imei, conn.RemoteAddr())
-			_, _ = conn.Write([]byte{0x01}) // ACK
+			_, _ = conn.Write([]byte{0x01})
 			continue
 		}
 
-		// Si no hay IMEI aún y esto no es IMEI, evitar parsear
 		if deviceIMEI == "" {
-			// evitar intentar parsear packets sin IMEI: log y continuar
+
 			log.Printf("[WARN] packet received before IMEI registration (%d bytes) from %s", n, conn.RemoteAddr())
 			continue
 		}
 
-		// Llamar al dispatcher pasando explicitamente el IMEI
 		go dispatcher.ProcessIncoming(deviceIMEI, data)
 	}
 }

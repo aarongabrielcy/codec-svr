@@ -10,12 +10,10 @@ import (
 	"codec-svr/internal/store"
 )
 
-// previousStates guarda últimos valores por imei -> key -> int
 var previousStates = make(map[string]map[string]int)
 
-// ProcessIncoming ahora recibe imei explícito junto con el payload
 func ProcessIncoming(imei string, data []byte) {
-	// Protección contra panic dentro del goroutine
+
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Printf("[PANIC RECOVER] %v\n%s\n", r, string(debug.Stack()))
@@ -33,7 +31,6 @@ func ProcessIncoming(imei string, data []byte) {
 
 	fmt.Printf("[INFO] Parsed AVL OK: %+v\n", parsed)
 
-	// Obtener io map con type-assertion segura
 	rawIO, ok := parsed["io"]
 	if !ok {
 		fmt.Println("[WARN] no IO elements found in parsed data")
@@ -42,12 +39,11 @@ func ProcessIncoming(imei string, data []byte) {
 
 	ioMap, ok := rawIO.(map[int]map[string]interface{})
 	if !ok {
-		// fallback: try other possible type for safety (avoid panic)
+
 		fmt.Printf("[ERROR] unexpected 'io' type: %T\n", rawIO)
 		return
 	}
 
-	// Extraer campos de interés
 	getVal := func(id int) int {
 		if v, exists := ioMap[id]; exists {
 			if val, ok := v["val"].(int); ok {
@@ -58,24 +54,21 @@ func ProcessIncoming(imei string, data []byte) {
 	}
 
 	ign := getVal(239)
-	extVolt := getVal(66)   // mV
-	battery := getVal(113)  // battery % (some devices)
-	in1 := getVal(200)      // example input
-	out1 := getVal(237)     // example output
-	movement := getVal(240) // movement
+	extVolt := getVal(66)
+	battery := getVal(113)
+	in1 := getVal(200)
+	out1 := getVal(237)
+	movement := getVal(240)
 
-	// Log estado actual
 	fmt.Printf("[STATE] IMEI=%s Ignition=%d Battery=%d ExtVolt=%d In1=%d Out1=%d Move=%d\n",
 		imei, ign, battery, extVolt, in1, out1, movement)
 
-	// Detectar cambios y persistir en Redis temporalmente
 	emitIfChanged(imei, "ign", ign)
 	emitIfChanged(imei, "out1", out1)
 	emitIfChanged(imei, "in1", in1)
 	emitIfChanged(imei, "bat", battery)
 	emitIfChanged(imei, "extvolt", extVolt)
 
-	// En futuro: pipeline.ProcessPacket(parsed) o envío gRPC
 	_ = time.Now()
 }
 
@@ -87,7 +80,7 @@ func emitIfChanged(imei, key string, newVal int) {
 	if oldVal != newVal {
 		fmt.Printf("[EVENT] %s %s changed %d -> %d\n", imei, key, oldVal, newVal)
 		previousStates[imei][key] = newVal
-		// Guardar en Redis (clave por ejemplo: state:<imei>:<key>)
+
 		store.SaveEventRedis(fmt.Sprintf("state:%s:%s", imei, key), newVal)
 	}
 }
