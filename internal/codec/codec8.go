@@ -71,37 +71,133 @@ func ParseCodec8E(data []byte) (map[string]interface{}, error) {
 	result["satellites"] = satellites
 	result["speed_kph"] = speed
 
-	// IO Header
 	if len(data) <= offset+2 {
-		return result, fmt.Errorf("data too short for IO header (offset=%d)", offset)
-	}
-	/*eventIO := data[offset]
-	totalIO := int(data[offset+1])
-	offset += 2*/
-	if len(data) <= offset+1 {
 		return result, fmt.Errorf("data too short for IO header (offset=%d)", offset)
 	}
 	eventIO := data[offset]
 	totalIO := int(data[offset+1])
-
-	// validación de alineación
-	if totalIO == 0 && len(data) > offset+3 {
-		// parece que nos desfasamos: intenta corregir
-		fmt.Printf("[WARN] totalIO=0 at offset=%d, trying realign...\n", offset)
-		eventIO = data[offset+1]
-		totalIO = int(data[offset+2])
-		offset++ // corrige desplazamiento
-	}
-
 	offset += 2
-	result["event_io_id"] = eventIO
-	result["io_total"] = totalIO
 
+	// ⚠️ Algunos dispositivos (como FMC125) mandan totalIO=0 aunque haya IOs reales.
+	// Si totalIO == 0, asumimos que sigue directamente el bloque de IOs.
+	if totalIO == 0 {
+		fmt.Printf("[WARN] totalIO=0 (FMC125 workaround enabled) → trying fallback parser...\n")
+		ioElements := make(map[int]map[string]interface{})
+
+		// Leer grupos manualmente: 1B, 2B, 4B, 8B, XB
+		groupSizes := []int{1, 2, 4, 8}
+		for _, size := range groupSizes {
+			if offset >= len(data) {
+				break
+			}
+			count := int(data[offset])
+			offset++
+			for i := 0; i < count; i++ {
+				if offset+1+size > len(data) {
+					break
+				}
+				id := int(data[offset])
+				valBytes := data[offset+1 : offset+1+size]
+				offset += 1 + size
+
+				var val int
+				switch size {
+				case 1:
+					val = int(valBytes[0])
+				case 2:
+					val = int(binary.BigEndian.Uint16(valBytes))
+				case 4:
+					val = int(binary.BigEndian.Uint32(valBytes))
+				case 8:
+					val = int(binary.BigEndian.Uint64(valBytes))
+				}
+
+				ioElements[id] = map[string]interface{}{
+					"size": size,
+					"val":  val,
+				}
+			}
+		}
+
+		// Grupo X (id, size, value)
+		if offset < len(data) {
+			countX := int(data[offset])
+			offset++
+			for i := 0; i < countX; i++ {
+				if offset+2 > len(data) {
+					break
+				}
+				id := int(data[offset])
+				size := int(data[offset+1])
+				offset += 2
+				if offset+size > len(data) {
+					break
+				}
+				valBytes := data[offset : offset+size]
+				offset += size
+				val := binary.BigEndian.Uint32(append(make([]byte, 4-len(valBytes)), valBytes...))
+				ioElements[id] = map[string]interface{}{
+					"size": size,
+					"val":  int(val),
+				}
+			}
+		}
+
+		result["event_io_id"] = eventIO
+		result["io_total"] = len(ioElements)
+		result["io"] = ioElements
+	} else {
+		// ← fallback al parser normal (si el equipo sí usa totalIO > 0)
+		ioElements := make(map[int]map[string]interface{})
+		totalRead := 0
+		readGroup := func(size int) error {
+			if totalRead >= totalIO {
+				return nil
+			}
+			if offset >= len(data) {
+				return fmt.Errorf("unexpected EOF at offset %d", offset)
+			}
+			count := int(data[offset])
+			offset++
+			for i := 0; i < count; i++ {
+				if offset+1+size > len(data) {
+					return nil
+				}
+				id := int(data[offset])
+				valBytes := data[offset+1 : offset+1+size]
+				offset += 1 + size
+				var val int
+				switch size {
+				case 1:
+					val = int(valBytes[0])
+				case 2:
+					val = int(binary.BigEndian.Uint16(valBytes))
+				case 4:
+					val = int(binary.BigEndian.Uint32(valBytes))
+				case 8:
+					val = int(binary.BigEndian.Uint64(valBytes))
+				}
+				ioElements[id] = map[string]interface{}{"size": size, "val": val}
+				totalRead++
+				if totalRead >= totalIO {
+					return nil
+				}
+			}
+			return nil
+		}
+
+		for _, s := range []int{1, 2, 4, 8} {
+			if err := readGroup(s); err != nil {
+				return result, err
+			}
+		}
+		result["event_io_id"] = eventIO
+		result["io_total"] = totalIO
+		result["io"] = ioElements
+	}
 	ioElements := make(map[int]map[string]interface{})
-
 	// totalRead lleva la cuenta de IOs leídos en total (debe ser <= totalIO)
 	totalRead := 0
-
 	// Helper para leer grupos (1B,2B,4B,8B)
 	readGroup := func(size int) error {
 		if totalRead >= totalIO {
