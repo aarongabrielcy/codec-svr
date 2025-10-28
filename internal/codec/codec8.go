@@ -29,11 +29,10 @@ func getIO(io map[int]int, id int) int {
 
 // Estructura básica del paquete AVL
 type AVLData struct {
-	Timestamp  time.Time
-	Priority   byte
-	GPS        map[string]interface{}
-	IO         map[int]int
-	IOElements map[int]map[string]interface{}
+	Timestamp time.Time
+	Priority  byte
+	GPS       map[string]interface{}
+	IO        map[int]int
 }
 
 func ParseCodec8E(imei string, data []byte) (*AVLData, error) {

@@ -31,12 +31,13 @@ func ProcessIncoming(imei string, data []byte) {
 
 	fmt.Printf("[INFO] Parsed AVL OK: %+v\n", parsed)
 
-	if parsed.IOElements == nil || len(parsed.IOElements) == 0 {
+	// Mapa de IOs
+	ioMap := parsed.IO
+	if len(ioMap) == 0 {
 		fmt.Println("[WARN] no IO elements found in parsed data")
 		return
 	}
 
-	ioMap := parsed.IOElements
 	// === BLOQUE DE DEPURACIÓN: Mostrar IOs ordenados ===
 	fmt.Println("─────────────────────────────")
 	fmt.Printf("[DEBUG] IO MAP for IMEI %s\n", imei)
@@ -46,57 +47,41 @@ func ProcessIncoming(imei string, data []byte) {
 	}
 	sort.Ints(ids)
 	for _, id := range ids {
-		val := ioMap[id]["val"]
-		size := ioMap[id]["size"]
-		fmt.Printf("  • ID=%d (size=%v) → %v\n", id, size, val)
+		fmt.Printf("  • ID=%d → %v\n", id, ioMap[id])
 	}
 	fmt.Println("─────────────────────────────")
+
+	// === Asignación de variables de estado ===
 	ign := getValAny(ioMap, 239, 66, 69, 78)      // Ignition
 	battery := getValAny(ioMap, 67, 10, 240, 241) // Internal battery voltage
 	extVolt := getValAny(ioMap, 21, 68, 70, 72)   // External voltage / power supply
-	in1 := getValAny(ioMap, 1, 9, 200)            // Digital input 1
+	in1 := getValAny(ioMap, 1, 200)               // Digital input 1
+	in2 := getValAny(ioMap, 2, 201)               // Digital input 2
 	out1 := getValAny(ioMap, 179, 178, 237)       // Digital output 1
 	movement := getValAny(ioMap, 240, 181, 182)   // Movement or motion
+	ain1 := getValAny(ioMap, 9, 205, 206)         // Analog input 1 (ADC1)
 
 	fmt.Printf("[DEBUG] IO MAP DUMP: %+v\n", ioMap)
-	fmt.Printf("[STATE] IMEI=%s Ignition=%d Battery=%d ExtVolt=%d In1=%d Out1=%d Move=%d\n",
-		imei, ign, battery, extVolt, in1, out1, movement)
+	fmt.Printf("[STATE] IMEI=%s Ignition=%d Battery=%d ExtVolt=%d In1=%d In2=%d Out1=%d AIn1=%d Move=%d\n",
+		imei, ign, battery, extVolt, in1, in2, out1, ain1, movement)
 
+	// Emitir eventos solo si hubo cambio de valor
 	emitIfChanged(imei, "ign", ign)
-	emitIfChanged(imei, "out1", out1)
-	emitIfChanged(imei, "in1", in1)
 	emitIfChanged(imei, "bat", battery)
 	emitIfChanged(imei, "extvolt", extVolt)
+	emitIfChanged(imei, "in1", in1)
+	emitIfChanged(imei, "in2", in2)
+	emitIfChanged(imei, "out1", out1)
+	emitIfChanged(imei, "ain1", ain1)
+	emitIfChanged(imei, "move", movement)
 
 	_ = time.Now()
 }
 
-func getValAny(ioMap map[int]map[string]interface{}, ids ...int) int {
+func getValAny(ioMap map[int]int, ids ...int) int {
 	for _, id := range ids {
-		if v, exists := ioMap[id]; exists {
-			val := v["val"]
-			switch num := val.(type) {
-			case int:
-				return num
-			case int32:
-				return int(num)
-			case int64:
-				return int(num)
-			case float32:
-				return int(num)
-			case float64:
-				return int(num)
-			case uint8:
-				return int(num)
-			case uint16:
-				return int(num)
-			case uint32:
-				return int(num)
-			case uint64:
-				return int(num)
-			default:
-				fmt.Printf("[WARN] unexpected type for IO[%d]: %T → %v\n", id, val, val)
-			}
+		if val, exists := ioMap[id]; exists {
+			return val
 		}
 	}
 	return 0
