@@ -23,7 +23,7 @@ func ProcessIncoming(imei string, data []byte) {
 	rawHex := hex.EncodeToString(data)
 	fmt.Printf("\033[33m[WARN]\033[0m RAW HEX (%d bytes): %s\n", len(data), rawHex)
 
-	parsed, err := codec.ParseCodec8E(data)
+	parsed, err := codec.ParseCodec8E(imei, data)
 	if err != nil {
 		fmt.Printf("[ERROR] error parsing data: %v\n", err)
 		return
@@ -31,17 +31,12 @@ func ProcessIncoming(imei string, data []byte) {
 
 	fmt.Printf("[INFO] Parsed AVL OK: %+v\n", parsed)
 
-	rawIO, ok := parsed["io"]
-	if !ok {
+	if parsed.IOElements == nil || len(parsed.IOElements) == 0 {
 		fmt.Println("[WARN] no IO elements found in parsed data")
 		return
 	}
 
-	ioMap, ok := rawIO.(map[int]map[string]interface{})
-	if !ok {
-		fmt.Printf("[ERROR] unexpected 'io' type: %T\n", rawIO)
-		return
-	}
+	ioMap := parsed.IOElements
 	// === BLOQUE DE DEPURACIÓN: Mostrar IOs ordenados ===
 	fmt.Println("─────────────────────────────")
 	fmt.Printf("[DEBUG] IO MAP for IMEI %s\n", imei)
