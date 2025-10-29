@@ -50,9 +50,10 @@ func BuildTrackingFromStates(
 	tr.Outputs["out1"] = state["out1"]
 
 	// Extras (batería %, ext volt mV, ain1 raw)
-	tr.Extras["battery_pct"] = uint64(state["bat"])
 	tr.Extras["ext_voltage_mv"] = uint64(state["extvolt"])
+	tr.Extras["battery_mv"] = uint64(state["batVolt"])
 	tr.Extras["ain1_raw"] = uint64(state["ain1"])
+	tr.Extras["battery_pct"] = uint64(state["batPerc"])
 
 	return tr
 }
@@ -117,6 +118,9 @@ func DecodeIO(imei string, raw map[uint16]codecIoItem, tr *TrackingObject) {
 	} // 0..100
 	if v, ok := get(codec.IOExtVolt); ok {
 		tr.Extras["ext_voltage_mv"] = v.Val
+	} // mV
+	if v, ok := get(codec.IOBatteryVolt); ok {
+		tr.Extras["battery_mv"] = v.Val
 	} // mV
 
 	// Ejemplo de AIN1

@@ -17,7 +17,7 @@ const (
 	IOBLETemp1     = 25
 	IOBLEBatt1     = 29
 	IOExtVolt      = 66 // 2B → mV
-	IOBattery      = 67 // 1B → mV
+	IOBatteryVolt  = 67 // 1B → mV
 	IOGnssState    = 69
 	IOBLEHumidity1 = 86
 	IOBattLevel    = 113 // 1B → %
