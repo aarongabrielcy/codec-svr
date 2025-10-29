@@ -35,8 +35,8 @@ func ProcessIncoming(imei string, frame []byte) {
 		return
 	}
 
-	fmt.Printf("[INFO] Parsed AVL OK: ts=%v prio=%v lat=%.6f lon=%.6f\n",
-		parsed["timestamp"], parsed["priority"], toFloat(parsed["latitude"]), toFloat(parsed["longitude"]))
+	fmt.Printf("[INFO] Parsed AVL OK: ts=%v prio=%v lat=%.6f lon=%.6f alt=%f ang=%f  spd=%f sat=%d \n",
+		parsed["timestamp"], parsed["priority"], toFloat(parsed["latitude"]), toFloat(parsed["longitude"]), toFloat(parsed["altitude"]), toFloat(parsed["angle"]), toFloat(parsed["speed"]), int(toFloat(parsed["satellites"])))
 
 	// 1) Normalizar IOs a map[int]int
 	ioMap := extractIOIntMap(parsed["io"])
@@ -72,23 +72,26 @@ func ProcessIncoming(imei string, frame []byte) {
 	}
 
 	// Mapea lo principal (ajustable a tu FMC125)
-	in1 := getValAny(ioMap, 1, 200)
-	in2 := getValAny(ioMap, 2, 201)
-	ign := getValAny(ioMap, 239)
-	move := getValAny(ioMap, 240)
-	out1 := getValAny(ioMap, 179, 178, 237)
-	batt := getValAny(ioMap, 67)     // %
-	extmv := getValAny(ioMap, 66)    // mV
-	ain1 := getValAny(ioMap, 9, 205) // raw
-
+	in1 := getValAny(ioMap, codec.IOIn1)
+	in2 := getValAny(ioMap, codec.IOIn2)
+	ign := getValAny(ioMap, codec.IOIgnition)
+	move := getValAny(ioMap, codec.IOMovement)
+	out1 := getValAny(ioMap, codec.IOOut1)
+	batt := getValAny(ioMap, codec.IOBattery)       // mV
+	battPerc := getValAny(ioMap, codec.IOBattLevel) // %
+	extmv := getValAny(ioMap, codec.IOExtVolt)      // mV
+	ain1 := getValAny(ioMap, codec.IOAin1)          // raw
+	sleep := getValAny(ioMap, codec.IOSleepMode)    // 0|
 	setState("in1", in1)
 	setState("in2", in2)
 	setState("ign", ign)
 	setState("move", move)
 	setState("out1", out1)
-	setState("bat", batt)
+	setState("batVolt", batt)
+	setState("batPerc", battPerc)
 	setState("extvolt", extmv)
 	setState("ain1", ain1)
+	setState("sleep", sleep)
 
 	// 4) LEER DE REDIS los valores normalizados (fuente de verdad)
 	keys := []string{
@@ -97,7 +100,8 @@ func ProcessIncoming(imei string, frame []byte) {
 		fmt.Sprintf("state:%s:%s", imei, "ign"),
 		fmt.Sprintf("state:%s:%s", imei, "move"),
 		fmt.Sprintf("state:%s:%s", imei, "out1"),
-		fmt.Sprintf("state:%s:%s", imei, "bat"),
+		fmt.Sprintf("state:%s:%s", imei, "batVolt"),
+		fmt.Sprintf("state:%s:%s", imei, "batPerc"),
 		fmt.Sprintf("state:%s:%s", imei, "extvolt"),
 		fmt.Sprintf("state:%s:%s", imei, "ain1"),
 	}
@@ -109,9 +113,10 @@ func ProcessIncoming(imei string, frame []byte) {
 		"ign":     redisVals[keys[2]],
 		"move":    redisVals[keys[3]],
 		"out1":    redisVals[keys[4]],
-		"bat":     redisVals[keys[5]],
+		"batVolt": redisVals[keys[5]],
 		"extvolt": redisVals[keys[6]],
 		"ain1":    redisVals[keys[7]],
+		"batPerc": redisVals[keys[8]],
 	}
 
 	// 5) Construir TrackingObject con GPS + estados de Redis y emitir por gRPC
@@ -254,17 +259,4 @@ func getValAny(ioMap map[int]int, ids ...int) int {
 		}
 	}
 	return 0
-}
-
-func emitIfChanged(imei, key string, newVal int) {
-	if previousStates[imei] == nil {
-		previousStates[imei] = make(map[string]int)
-	}
-	oldVal := previousStates[imei][key]
-	if oldVal != newVal {
-		fmt.Printf("[EVENT] %s %s changed %d -> %d\n", imei, key, oldVal, newVal)
-		previousStates[imei][key] = newVal
-
-		store.SaveEventRedisSafe(fmt.Sprintf("state:%s:%s", imei, key), newVal)
-	}
 }
