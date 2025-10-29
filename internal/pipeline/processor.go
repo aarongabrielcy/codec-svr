@@ -93,34 +93,34 @@ func DecodeIO(imei string, raw map[uint16]codecIoItem, tr *TrackingObject) {
 	}
 
 	// Inputs/outputs típicos
-	if v, ok := get(1); ok {
+	if v, ok := get(codec.IOIn1); ok {
 		tr.Inputs["in1"] = int(v.Val)
 	}
-	if v, ok := get(2); ok {
+	if v, ok := get(codec.IOIn2); ok {
 		tr.Inputs["in2"] = int(v.Val)
 	}
 
 	// Ignition / Movement / Outputs
-	if v, ok := get(239); ok {
+	if v, ok := get(codec.IOIgnition); ok {
 		tr.Inputs["ignition"] = int(v.Val)
 	} // 0|1
-	if v, ok := get(240); ok {
+	if v, ok := get(codec.IOMovement); ok {
 		tr.Inputs["movement"] = int(v.Val)
 	} // 0|1
-	if v, ok := get(179); ok {
+	if v, ok := get(codec.IOOut1); ok {
 		tr.Outputs["out1"] = int(v.Val)
 	} // 0|1 (depende config)
 
 	// Battery % (1B) y External Voltage (mV)
-	if v, ok := get(113); ok {
+	if v, ok := get(codec.IOBattLevel); ok {
 		tr.Extras["battery_pct"] = v.Val
 	} // 0..100
-	if v, ok := get(66); ok {
+	if v, ok := get(codec.IOExtVolt); ok {
 		tr.Extras["ext_voltage_mv"] = v.Val
 	} // mV
 
 	// Ejemplo de AIN1
-	if v, ok := get(9); ok {
+	if v, ok := get(codec.IOAin1); ok {
 		tr.Extras["ain1_raw"] = v.Val
 	}
 
@@ -139,7 +139,7 @@ func DecodeIO(imei string, raw map[uint16]codecIoItem, tr *TrackingObject) {
 
 func ToGRPC(tr *TrackingObject) []string {
 	// Aquí conviertes a tu mensaje gRPC real; de momento, devolvemos una sola línea JSON-like
-	out := fmt.Sprintf(`{"imei":"%s","dt":"%s","lat":%.6f,"lon":%.6f,"spd":%d,"crs":%d,"sats":%d,"in":%v,"out":%v,"x":%v}`,
+	out := fmt.Sprintf(`{"imei":"%s","dt":"%s","lat":%.6f,"lon":%.6f,"spd":%d,"crs":%d,"sats":%d,"in":%v,"out":%v,"Ext":%v}`,
 		tr.IMEI, tr.Datetime, tr.Latitude, tr.Longitude, tr.Speed, tr.Course, tr.Satellites, tr.Inputs, tr.Outputs, tr.Extras)
 	return []string{out}
 }
