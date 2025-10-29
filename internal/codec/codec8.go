@@ -9,14 +9,15 @@ import (
 
 // IO IDs de interés (FMC125: consulta tabla Teltonika para el mapping exacto)
 const (
-	IOIgnition = 239 // 1B → {0|1}
-	IOMovement = 240 // 1B → {0|1}
-	IOExtVolt  = 66  // 2B → mV
-	IOBattery  = 67  // 1B → %
-	IOAin1     = 9   // 2B → raw (depende de perfil)
-	IOIn1      = 1   // 1B → {0|1}
-	IOIn2      = 2   // 1B → {0|1}
-	IOOut1     = 179 // 2B → {0|1} (según config)
+	IOIgnition  = 239 // 1B → {0|1}
+	IOMovement  = 240 // 1B → {0|1}
+	IOExtVolt   = 66  // 2B → mV
+	IOBattery   = 67  // 1B → mV
+	IOBattLevel = 113 // 1B → %
+	IOAin1      = 9   // 2B → raw (depende de perfil)
+	IOIn1       = 1   // 1B → {0|1}
+	IOIn2       = 2   // 1B → {0|1}
+	IOOut1      = 179 // 2B → {0|1} (según config)
 )
 
 type ioItem struct {
