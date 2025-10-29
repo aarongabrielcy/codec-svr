@@ -125,9 +125,12 @@ func ProcessIncoming(imei string, frame []byte) {
 		int(toFloat(parsed["satellites"])),
 		state,
 	)
+	lg := observability.NewLogger()
 
 	msgs := pipeline.ToGRPC(tr)
-	_ = msgs // aquí invocas tu cliente gRPC real
+	for _, m := range msgs {
+		lg.Info("gRPC payload", "imei", tr.IMEI, "payload", m)
+	}
 }
 
 // ------------------------- helpers -------------------------
