@@ -50,8 +50,8 @@ func BuildTrackingFromStates(
 	tr.Outputs["out1"] = state["out1"]
 
 	// Extras (batería %, ext volt mV, ain1 raw)
-	tr.Extras["ext_voltage_mv"] = uint64(state["extvolt"])
 	tr.Extras["battery_mv"] = uint64(state["batVolt"])
+	tr.Extras["ext_voltage_mv"] = uint64(state["extvolt"])
 	tr.Extras["ain1_raw"] = uint64(state["ain1"])
 	tr.Extras["battery_pct"] = uint64(state["batPerc"])
 

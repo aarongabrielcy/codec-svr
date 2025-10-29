@@ -110,9 +110,9 @@ func ProcessIncoming(imei string, frame []byte) {
 		fmt.Sprintf("state:%s:%s", imei, "move"),
 		fmt.Sprintf("state:%s:%s", imei, "out1"),
 		fmt.Sprintf("state:%s:%s", imei, "batVolt"),
-		fmt.Sprintf("state:%s:%s", imei, "batPerc"),
 		fmt.Sprintf("state:%s:%s", imei, "extvolt"),
 		fmt.Sprintf("state:%s:%s", imei, "ain1"),
+		fmt.Sprintf("state:%s:%s", imei, "batPerc"),
 	}
 	redisVals := store.GetStatesRedis(keys)
 	// construir un map normalizado key->int
