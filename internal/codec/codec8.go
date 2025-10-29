@@ -18,6 +18,7 @@ const (
 	IOIn1       = 1   // 1B → {0|1}
 	IOIn2       = 2   // 1B → {0|1}
 	IOOut1      = 179 // 2B → {0|1} (según config)
+	IOSleepMode = 200 // 1B → {0|1} (según config)
 )
 
 type ioItem struct {

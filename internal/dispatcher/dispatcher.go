@@ -72,15 +72,16 @@ func ProcessIncoming(imei string, frame []byte) {
 	}
 
 	// Mapea lo principal (ajustable a tu FMC125)
-	in1 := getValAny(ioMap, 1, 200)
-	in2 := getValAny(ioMap, 2, 201)
-	ign := getValAny(ioMap, 239)
-	move := getValAny(ioMap, 240)
-	out1 := getValAny(ioMap, 179, 178, 237)
-	batt := getValAny(ioMap, 67)      // mV
-	battPerc := getValAny(ioMap, 113) // %
-	extmv := getValAny(ioMap, 66)     // mV
-	ain1 := getValAny(ioMap, 9, 205)  // raw
+	in1 := getValAny(ioMap, codec.IOIn1)
+	in2 := getValAny(ioMap, codec.IOIn2)
+	ign := getValAny(ioMap, codec.IOIgnition)
+	move := getValAny(ioMap, codec.IOMovement)
+	out1 := getValAny(ioMap, codec.IOOut1)
+	batt := getValAny(ioMap, codec.IOBattery)       // mV
+	battPerc := getValAny(ioMap, codec.IOBattLevel) // %
+	extmv := getValAny(ioMap, codec.IOExtVolt)      // mV
+	ain1 := getValAny(ioMap, codec.IOAin1)          // raw
+	sleep := getValAny(ioMap, codec.IOSleepMode)    // 0|
 	setState("in1", in1)
 	setState("in2", in2)
 	setState("ign", ign)
@@ -90,6 +91,7 @@ func ProcessIncoming(imei string, frame []byte) {
 	setState("batPerc", battPerc)
 	setState("extvolt", extmv)
 	setState("ain1", ain1)
+	setState("sleep", sleep)
 
 	// 4) LEER DE REDIS los valores normalizados (fuente de verdad)
 	keys := []string{
@@ -257,17 +259,4 @@ func getValAny(ioMap map[int]int, ids ...int) int {
 		}
 	}
 	return 0
-}
-
-func emitIfChanged(imei, key string, newVal int) {
-	if previousStates[imei] == nil {
-		previousStates[imei] = make(map[string]int)
-	}
-	oldVal := previousStates[imei][key]
-	if oldVal != newVal {
-		fmt.Printf("[EVENT] %s %s changed %d -> %d\n", imei, key, oldVal, newVal)
-		previousStates[imei][key] = newVal
-
-		store.SaveEventRedisSafe(fmt.Sprintf("state:%s:%s", imei, key), newVal)
-	}
 }

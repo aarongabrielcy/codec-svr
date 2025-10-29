@@ -112,7 +112,7 @@ func DecodeIO(imei string, raw map[uint16]codecIoItem, tr *TrackingObject) {
 	} // 0|1 (depende config)
 
 	// Battery % (1B) y External Voltage (mV)
-	if v, ok := get(67); ok {
+	if v, ok := get(113); ok {
 		tr.Extras["battery_pct"] = v.Val
 	} // 0..100
 	if v, ok := get(66); ok {
