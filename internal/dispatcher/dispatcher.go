@@ -35,7 +35,8 @@ func ProcessIncoming(imei string, frame []byte) {
 		fmt.Printf("[ERROR] parsing data: %v\n", err)
 		return
 	}
-	fmt.Printf("[INFO] Parsed AVL OK: ts=%v prio=%v lat=%.6f lon=%.6f alt=%d ang=%d spd=%d sat=%d\n",
+	fmt.Printf("[INFO] Parsed AVL OK: codeid=%X ts=%v prio=%v lat=%.6f lon=%.6f alt=%d ang=%d spd=%d sat=%d\n", //%X convierte decimal a Hexadecimal
+		parsed["codec_id"],
 		parsed["timestamp"],
 		parsed["priority"],
 		toFloatAny(parsed["latitude"]),
