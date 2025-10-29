@@ -85,7 +85,7 @@ func ProcessIncoming(imei string, frame []byte) {
 	ign := getValAny(ioMap, codec.IOIgnition)
 	move := getValAny(ioMap, codec.IOMovement)
 	out1 := getValAny(ioMap, codec.IOOut1)
-	batt := getValAny(ioMap, codec.IOBattery)       // mV
+	batt := getValAny(ioMap, codec.IOBatteryVolt)   // mV
 	battPerc := getValAny(ioMap, codec.IOBattLevel) // %
 	extmv := getValAny(ioMap, codec.IOExtVolt)      // mV
 	ain1 := getValAny(ioMap, codec.IOAin1)          // raw
