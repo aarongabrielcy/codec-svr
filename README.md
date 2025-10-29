@@ -18,3 +18,9 @@ go run ./cmd/server
 go build -o codec-svr ./cmd/server
 sudo systemctl enable codec-svr
 sudo systemctl status codec-svr
+
+## Pendientes
+## 1. revisar por que redis no está actualizando
+## 2. el orden de los estados de IO
+## 3. aplicar la emision de datos por gRPC
+ 

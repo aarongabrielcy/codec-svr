@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"time"
 
 	"codec-svr/internal/codec"
@@ -34,9 +35,16 @@ func ProcessIncoming(imei string, frame []byte) {
 		fmt.Printf("[ERROR] parsing data: %v\n", err)
 		return
 	}
-
-	fmt.Printf("[INFO] Parsed AVL OK: ts=%v prio=%v lat=%.6f lon=%.6f alt=%f ang=%f  spd=%f sat=%d \n",
-		parsed["timestamp"], parsed["priority"], toFloat(parsed["latitude"]), toFloat(parsed["longitude"]), toFloat(parsed["altitude"]), toFloat(parsed["angle"]), toFloat(parsed["speed"]), int(toFloat(parsed["satellites"])))
+	fmt.Printf("[INFO] Parsed AVL OK: ts=%v prio=%v lat=%.6f lon=%.6f alt=%d ang=%d spd=%d sat=%d\n",
+		parsed["timestamp"],
+		parsed["priority"],
+		toFloatAny(parsed["latitude"]),
+		toFloatAny(parsed["longitude"]),
+		toIntAny(parsed["altitude"]),
+		toIntAny(parsed["angle"]),
+		toIntAny(parsed["speed"]),
+		toIntAny(parsed["satellites"]),
+	)
 
 	// 1) Normalizar IOs a map[int]int
 	ioMap := extractIOIntMap(parsed["io"])
@@ -82,6 +90,7 @@ func ProcessIncoming(imei string, frame []byte) {
 	extmv := getValAny(ioMap, codec.IOExtVolt)      // mV
 	ain1 := getValAny(ioMap, codec.IOAin1)          // raw
 	sleep := getValAny(ioMap, codec.IOSleepMode)    // 0|
+
 	setState("in1", in1)
 	setState("in2", in2)
 	setState("ign", ign)
@@ -123,11 +132,11 @@ func ProcessIncoming(imei string, frame []byte) {
 	tr := pipeline.BuildTrackingFromStates(
 		imei,
 		parsed["timestamp"],
-		toFloat(parsed["latitude"]),
-		toFloat(parsed["longitude"]),
-		int(toFloat(parsed["speed"])),
-		int(toFloat(parsed["angle"])),
-		int(toFloat(parsed["satellites"])),
+		toFloatAny(parsed["latitude"]),
+		toFloatAny(parsed["longitude"]),
+		toIntAny(parsed["speed"]),
+		toIntAny(parsed["angle"]),
+		toIntAny(parsed["satellites"]),
 		state,
 	)
 	lg := observability.NewLogger()
@@ -259,4 +268,72 @@ func getValAny(ioMap map[int]int, ids ...int) int {
 		}
 	}
 	return 0
+}
+
+func toIntAny(x interface{}) int {
+	switch v := x.(type) {
+	case int:
+		return v
+	case int8:
+		return int(v)
+	case int16:
+		return int(v)
+	case int32:
+		return int(v)
+	case int64:
+		return int(v)
+	case uint:
+		return int(v)
+	case uint8:
+		return int(v)
+	case uint16:
+		return int(v)
+	case uint32:
+		return int(v)
+	case uint64:
+		return int(v)
+	case float32:
+		return int(v)
+	case float64:
+		return int(v)
+	case string:
+		n, _ := strconv.Atoi(v)
+		return n
+	default:
+		return 0
+	}
+}
+
+func toFloatAny(x interface{}) float64 {
+	switch v := x.(type) {
+	case float32:
+		return float64(v)
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case int8:
+		return float64(v)
+	case int16:
+		return float64(v)
+	case int32:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case uint:
+		return float64(v)
+	case uint8:
+		return float64(v)
+	case uint16:
+		return float64(v)
+	case uint32:
+		return float64(v)
+	case uint64:
+		return float64(v)
+	case string:
+		f, _ := strconv.ParseFloat(v, 64)
+		return f
+	default:
+		return 0
+	}
 }
