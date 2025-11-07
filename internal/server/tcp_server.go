@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -44,8 +45,8 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 	defer conn.Close()
 	var st connState
 	st.log = lg
-
 	tmp := make([]byte, 4096)
+	firstAVLACK := false
 	for {
 		n, err := conn.Read(tmp)
 		if err != nil {
@@ -58,35 +59,73 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 			continue
 		}
 		st.buf.Write(tmp[:n])
-
-		if st.ready && !st.sentGetVer {
-			pkt := codec.BuildCodec12("getver")
-			if _, err := conn.Write(pkt); err == nil {
-				st.sentGetVer = true
-				slog.Info("sent getver", "imei", st.imei)
+		// ── (A) Handshake: leer IMEI y ACK 0x01 ─────────────────────────────
+		if st.imei == "" {
+			if tryReadIMEI(&st) {
+				lg.Info("handshake OK", "imei", st.imei)
+				if _, err := conn.Write([]byte{0x01}); err != nil {
+					lg.Error("handshake ack write failed", "err", err)
+					return
+				}
+				// Marcamos ready tras handshake; enviaremos getver luego del 1er ACK AVL
+				st.ready = true
+			} else {
+				// Aún no hay suficientes bytes para IMEI; leer más del socket
+				continue
 			}
 		}
+		// ── (B) Extraer frames: Codec12 primero, luego AVL ──────────────────
 		for {
 			pkt := tryReadAVLFrame(&st.buf)
 			if pkt == nil {
 				break
 			}
 			observability.PacketsRecv.Inc()
-
-			// ¿Es Codec 12 (comando/respuesta)?
-			if len(pkt) >= 13 && pkt[8] == 0x0C {
+			// Seguridad básica por tamaño
+			if len(pkt) < 13 {
+				lg.Warn("short frame", "len", len(pkt))
+				continue
+			}
+			codecID := pkt[8]
+			// (B1) Respuesta de comando (Codec 0x0C) => NO ACK
+			if codecID == 0x0C {
 				if text, err := codec.ParseCodec12Response(pkt); err == nil {
-					// Manejar respuesta de comando (p.ej. getver) y NO enviar ACK
 					dispatcher.HandleGetVerResponse(st.imei, text)
 					continue
 				}
+				lg.Warn("codec12: frame not parsed")
+				continue
 			}
-			// No es Codec12 -> trata como AVL normal
-			go dispatcher.ProcessIncoming(st.imei, pkt)
-
-			// ACK a Teltonika: por ahora 1 registro (siempre hay 1 en tus tramas)
-			_ = binary.Write(conn, binary.BigEndian, uint32(1))
-			observability.RecordsAck.Inc()
+			// (B2) AVL (Codec 0x08/0x8E): despachar y ACK dinámico (= Qty1)
+			if codecID == 0x08 || codecID == 0x8E {
+				if len(pkt) < 10 {
+					lg.Warn("bad avl frame (len)", "len", len(pkt))
+					continue
+				}
+				qty1 := int(pkt[9]) // Qty1 va justo después del CodecID
+				go dispatcher.ProcessIncoming(st.imei, pkt)
+				var ack [4]byte
+				binary.BigEndian.PutUint32(ack[:], uint32(qty1))
+				if _, err := conn.Write(ack[:]); err != nil {
+					lg.Error("ack write failed", "err", err)
+				} else {
+					observability.RecordsAck.Inc()
+					firstAVLACK = true
+				}
+				// (B3) Tras el primer ACK AVL, enviar getver una sola vez
+				if st.ready && firstAVLACK && !st.sentGetVer {
+					p := codec.BuildCodec12("getver")
+					if _, err := conn.Write(p); err == nil {
+						st.sentGetVer = true
+						lg.Info("sent getver", "imei", st.imei)
+					} else {
+						lg.Warn("send getver failed", "err", err)
+					}
+				}
+				continue
+			}
+			// (B4) Otros codecs: sólo log
+			lg.Warn("unknown codec", "id", fmt.Sprintf("0x%02X", codecID))
 		}
 	}
 }
