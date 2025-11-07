@@ -7,27 +7,6 @@ import (
 	"time"
 )
 
-// IO IDs de interés (FMC125: consulta tabla Teltonika para el mapping exacto)
-const (
-	IOIn1          = 1 // 1B → {0|1}
-	IOIn2          = 2
-	IOAin1         = 9 // 2B → raw (depende de perfil)
-	IOEcoScore     = 15
-	IOGSMSignal    = 21
-	IOBLETemp1     = 25
-	IOBLEBatt1     = 29
-	IOExtVolt      = 66 // 2B → mV
-	IOBatteryVolt  = 67 // 1B → mV
-	IOGnssState    = 69
-	IOBLEHumidity1 = 86
-	IOBattLevel    = 113 // 1B → %
-	IOOut1         = 179
-	IOIgnition     = 239 // 1B → {0|1}
-	IOMovement     = 240 // 1B → {0|1}
-	IOSleepMode    = 200
-	IONetworkType  = 237
-)
-
 type ioItem struct {
 	Size int
 	Val  uint64

@@ -2,9 +2,6 @@ package pipeline
 
 import (
 	"fmt"
-
-	"codec-svr/internal/codec"
-	"codec-svr/internal/store"
 )
 
 type TrackingObject struct {
@@ -54,12 +51,13 @@ func BuildTrackingFromStates(
 	tr.Extras["ext_voltage_mv"] = uint64(state["extvolt"])
 	tr.Extras["ain1_raw"] = uint64(state["ain1"])
 	tr.Extras["battery_pct"] = uint64(state["batPerc"])
-
+	tr.Extras["sleep_mode"] = uint64(state["sleepM"])
+	tr.Extras["vehicle_speed"] = uint64(state["vclSpd"])
 	return tr
 }
 
 // ParseAVL: decodifica el paquete, llena datos básicos y retorna io map crudo
-func ParseAVL(imei string, frame []byte) (*TrackingObject, map[uint16]codecIoItem, error) {
+/*func ParseAVL(imei string, frame []byte) (*TrackingObject, map[uint16]codecIoItem, error) {
 	parsed, err := codec.ParseCodec8E(frame)
 	if err != nil {
 		return nil, nil, err
@@ -78,16 +76,16 @@ func ParseAVL(imei string, frame []byte) (*TrackingObject, map[uint16]codecIoIte
 	}
 	raw := parsed["io"].(map[uint16]codecIoItem)
 	return tr, raw, nil
-}
+}*/
 
 // codecIoItem debe igualar el tipo en codec (ioItem)
-type codecIoItem struct {
+/*type codecIoItem struct {
 	Size int
 	Val  uint64
-}
+}*/
 
 // DecodeIO: mapea IOs conocidos (FMC125) y guarda estados en Redis
-func DecodeIO(imei string, raw map[uint16]codecIoItem, tr *TrackingObject) {
+/*func DecodeIO(imei string, raw map[uint16]codecIoItem, tr *TrackingObject) {
 	get := func(id uint16) (codecIoItem, bool) {
 		v, ok := raw[id]
 		return v, ok
@@ -127,6 +125,9 @@ func DecodeIO(imei string, raw map[uint16]codecIoItem, tr *TrackingObject) {
 	if v, ok := get(codec.IOAin1); ok {
 		tr.Extras["ain1_raw"] = v.Val
 	}
+	if v, ok := get(codec.IOSleepMode); ok {
+		tr.Extras["sleep_mode"] = v.Val
+	}
 
 	// Persistimos estados “último valor” para comparar cambios (TTL 10 min en store.SaveEventRedis)
 	save := func(key string, val int) {
@@ -139,7 +140,7 @@ func DecodeIO(imei string, raw map[uint16]codecIoItem, tr *TrackingObject) {
 	for k, val := range tr.Outputs {
 		save(k, val)
 	}
-}
+}*/
 
 func ToGRPC(tr *TrackingObject) []string {
 	// Aquí conviertes a tu mensaje gRPC real; de momento, devolvemos una sola línea JSON-like

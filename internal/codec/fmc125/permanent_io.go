@@ -1,0 +1,66 @@
+package fmc125
+
+//  IDs del dispositivo FMC125 (Teltonika Codec 8E)
+const (
+	DIn1         = 1 // 1B → {0|1}
+	DIn2         = 2
+	DIn3         = 3
+	PulseCntDI1  = 4
+	PulseCntDI2  = 5
+	AIn2         = 6
+	AIn1         = 9 // 2B → raw (depende del perfil)
+	SDStatus     = 10
+	CCID1        = 11
+	FuelUsedGPS  = 12
+	FuelRateGPS  = 13
+	CCID2        = 14
+	EcoScore     = 15 //  	Average amount of events on some distance
+	TotalOd      = 16
+	AxisX        = 17
+	AxisY        = 18
+	AxisZ        = 19
+	GSMSignal    = 21
+	VehicleSpeed = 24
+	BLETemp1     = 25
+	BLEBatt1     = 29
+	ExtVolt      = 66 // 2B → mV
+	BatteryVolt  = 67 // 1B → mV
+	BattCurrent  = 68
+	GnssStatus   = 69
+	DallasTemp1  = 72
+	DlsTempID1   = 76
+	IButton      = 78
+	DataMode     = 80
+	BLEHumidity1 = 86
+	BattLevel    = 113 // 1B → %
+	DOut1        = 179
+	DOut2        = 180
+	GnssPDOP     = 181
+	GnssHDOP     = 182
+	TripOdometer = 199
+	SleepMode    = 200
+	LLS1FuelLvl  = 201
+	LLS1Temp     = 202
+	GsmCellId    = 205
+	GsmAreCode   = 206
+	RFID         = 207
+	NetworkType  = 237
+	UserID       = 238
+	Ignition     = 239 // 1B → {0|1}
+	Movement     = 240 // 1B → {0|1}
+	ActiveGsmOPe = 241
+	BTStatus     = 263
+	BarcodeID    = 264
+	InstantMov   = 303
+	UL20202SFl   = 327
+	DOut3        = 380
+	GNDSense     = 381
+	ISO6709Coord = 387
+	DriverName   = 403
+	Dvrcardlcstp = 404
+	DriverGender = 405
+	DriverCardID = 406
+	UL20202SS    = 483
+	UMTSLTECelID = 636
+	ConnQuality  = 1148
+)
