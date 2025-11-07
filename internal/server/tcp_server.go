@@ -7,15 +7,17 @@ import (
 	"log/slog"
 	"net"
 
+	"codec-svr/internal/codec"
 	"codec-svr/internal/dispatcher"
 	"codec-svr/internal/observability"
 )
 
 type connState struct {
-	imei  string
-	buf   bytes.Buffer
-	ready bool
-	log   *slog.Logger
+	imei       string
+	buf        bytes.Buffer
+	ready      bool
+	log        *slog.Logger
+	sentGetVer bool
 }
 
 func Start(addr string) error {
@@ -57,18 +59,13 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 		}
 		st.buf.Write(tmp[:n])
 
-		if !st.ready {
-			if ok := tryReadIMEI(&st); ok {
-				lg.Info("handshake ok", "imei", st.imei)
-				observability.HandshakeOK.Inc()
-				_, _ = conn.Write([]byte{0x01})
-				st.ready = true
-			} else {
-				// esperar más bytes para el IMEI
-				continue
+		if st.ready && !st.sentGetVer {
+			pkt := codec.BuildCodec12("getver")
+			if _, err := conn.Write(pkt); err == nil {
+				st.sentGetVer = true
+				slog.Info("sent getver", "imei", st.imei)
 			}
 		}
-
 		for {
 			pkt := tryReadAVLFrame(&st.buf)
 			if pkt == nil {
@@ -76,7 +73,15 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 			}
 			observability.PacketsRecv.Inc()
 
-			// despatch
+			// ¿Es Codec 12 (comando/respuesta)?
+			if len(pkt) >= 13 && pkt[8] == 0x0C {
+				if text, err := codec.ParseCodec12Response(pkt); err == nil {
+					// Manejar respuesta de comando (p.ej. getver) y NO enviar ACK
+					dispatcher.HandleGetVerResponse(st.imei, text)
+					continue
+				}
+			}
+			// No es Codec12 -> trata como AVL normal
 			go dispatcher.ProcessIncoming(st.imei, pkt)
 
 			// ACK a Teltonika: por ahora 1 registro (siempre hay 1 en tus tramas)

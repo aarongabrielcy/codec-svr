@@ -5,18 +5,20 @@ import (
 )
 
 type Config struct {
-	TCPPort     string
-	MetricsPort string
-	GRPCServer  string
-	RedisAddr   string
+	TCPPort           string
+	MetricsPort       string
+	GRPCServer        string
+	RedisAddr         string
+	GetVerOnHandshake bool
 }
 
 func Load() Config {
 	return Config{
-		TCPPort:     getEnv("TCP_PORT", "8001"),
-		MetricsPort: getEnv("METRICS_PORT", "9000"),
-		GRPCServer:  getEnv("GRPC_SERVER", "localhost:50051"),
-		RedisAddr:   getEnv("REDIS_ADDR", "localhost:6379"),
+		TCPPort:           getEnv("TCP_PORT", "8001"),
+		MetricsPort:       getEnv("METRICS_PORT", "9000"),
+		GRPCServer:        getEnv("GRPC_SERVER", "localhost:50051"),
+		RedisAddr:         getEnv("REDIS_ADDR", "localhost:6379"),
+		GetVerOnHandshake: getEnv("GETVER_ON_HANDSHAKE", "1") != "0",
 	}
 }
 

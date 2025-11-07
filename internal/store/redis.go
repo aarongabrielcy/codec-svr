@@ -71,3 +71,29 @@ func GetStatesRedis(keys []string) map[string]int {
 	}
 	return out
 }
+
+// al final del archivo
+func SaveStringSafe(key, value string, ttl ...time.Duration) {
+	if rdb == nil {
+		fmt.Println("[WARN] redis not initialized")
+		return
+	}
+	exp := time.Duration(0)
+	if len(ttl) > 0 {
+		exp = ttl[0]
+	}
+	if err := rdb.Set(ctx, key, value, exp).Err(); err != nil {
+		fmt.Println("[REDIS] set error:", err)
+	}
+}
+
+func GetStringSafe(key string) string {
+	if rdb == nil {
+		return ""
+	}
+	s, err := rdb.Get(ctx, key).Result()
+	if err != nil {
+		return ""
+	}
+	return s
+}
