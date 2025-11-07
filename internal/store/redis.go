@@ -25,12 +25,17 @@ func InitRedis(addr string, db int) error {
 	return nil
 }
 
-func SaveEventRedisSafe(key string, value int) {
+func SaveEventRedisSafe(key string, value int, ttl ...time.Duration) {
 	if rdb == nil {
 		fmt.Println("[WARN] redis not initialized")
 		return
 	}
-	err := rdb.Set(ctx, key, value, 10*time.Minute).Err()
+	expiration := time.Duration(0) // 0 = sin expiración
+	if len(ttl) > 0 {
+		expiration = ttl[0] // 10*time.Minute
+	}
+
+	err := rdb.Set(ctx, key, value, expiration).Err()
 	if err != nil {
 		fmt.Printf("[ERROR] redis SET %s: %v\n", key, err)
 	}

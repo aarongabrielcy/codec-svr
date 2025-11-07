@@ -1,6 +1,11 @@
 package dispatcher
 
 import (
+	"codec-svr/internal/codec"
+	"codec-svr/internal/codec/fmc125"
+	"codec-svr/internal/observability"
+	"codec-svr/internal/pipeline"
+	"codec-svr/internal/store"
 	"encoding/hex"
 	"fmt"
 	"reflect"
@@ -8,11 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"time"
-
-	"codec-svr/internal/codec"
-	"codec-svr/internal/observability"
-	"codec-svr/internal/pipeline"
-	"codec-svr/internal/store"
 )
 
 var previousStates = make(map[string]map[string]int)
@@ -80,17 +80,17 @@ func ProcessIncoming(imei string, frame []byte) {
 		}
 	}
 
-	// Mapea lo principal (ajustable a tu FMC125)
-	in1 := getValAny(ioMap, codec.IOIn1)
-	in2 := getValAny(ioMap, codec.IOIn2)
-	ign := getValAny(ioMap, codec.IOIgnition)
-	move := getValAny(ioMap, codec.IOMovement)
-	out1 := getValAny(ioMap, codec.IOOut1)
-	batt := getValAny(ioMap, codec.IOBatteryVolt)   // mV
-	battPerc := getValAny(ioMap, codec.IOBattLevel) // %
-	extmv := getValAny(ioMap, codec.IOExtVolt)      // mV
-	ain1 := getValAny(ioMap, codec.IOAin1)          // raw
-	sleep := getValAny(ioMap, codec.IOSleepMode)    // 0|
+	in1 := getValAny(ioMap, fmc125.DIn1)
+	in2 := getValAny(ioMap, fmc125.DIn2)
+	ign := getValAny(ioMap, fmc125.Ignition)
+	move := getValAny(ioMap, fmc125.Movement)
+	out1 := getValAny(ioMap, fmc125.DOut1)
+	batt := getValAny(ioMap, fmc125.BatteryVolt)   // mV
+	battPerc := getValAny(ioMap, fmc125.BattLevel) // %
+	extmv := getValAny(ioMap, fmc125.ExtVolt)      // mV
+	ain1 := getValAny(ioMap, fmc125.AIn1)          // raw
+	sleep := getValAny(ioMap, fmc125.SleepMode)
+	vehicleSpd := getValAny(ioMap, fmc125.VehicleSpeed)
 
 	setState("in1", in1)
 	setState("in2", in2)
@@ -101,7 +101,7 @@ func ProcessIncoming(imei string, frame []byte) {
 	setState("batPerc", battPerc)
 	setState("extvolt", extmv)
 	setState("ain1", ain1)
-	setState("sleep", sleep)
+	//setState("sleep", sleep)
 
 	// 4) LEER DE REDIS los valores normalizados (fuente de verdad)
 	keys := []string{
@@ -127,6 +127,8 @@ func ProcessIncoming(imei string, frame []byte) {
 		"extvolt": redisVals[keys[6]],
 		"ain1":    redisVals[keys[7]],
 		"batPerc": redisVals[keys[8]],
+		"sleepM":  sleep,
+		"vclSpd":  vehicleSpd,
 	}
 
 	// 5) Construir TrackingObject con GPS + estados de Redis y emitir por gRPC
