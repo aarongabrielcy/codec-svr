@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"time"
 
 	"codec-svr/internal/codec"
 	"codec-svr/internal/dispatcher"
@@ -14,11 +15,12 @@ import (
 )
 
 type connState struct {
-	imei       string
-	buf        bytes.Buffer
-	ready      bool
-	log        *slog.Logger
-	sentGetVer bool
+	imei        string
+	buf         bytes.Buffer
+	ready       bool
+	log         *slog.Logger
+	sentGetVer  bool
+	sessionOpen time.Time
 }
 
 func Start(addr string) error {
@@ -40,13 +42,14 @@ func Start(addr string) error {
 		go handleConn(conn, lg.With("remote", conn.RemoteAddr().String()))
 	}
 }
-
 func handleConn(conn net.Conn, lg *slog.Logger) {
 	defer conn.Close()
 	var st connState
 	st.log = lg
+
 	tmp := make([]byte, 4096)
 	firstAVLACK := false
+
 	for {
 		n, err := conn.Read(tmp)
 		if err != nil {
@@ -59,35 +62,33 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 			continue
 		}
 		st.buf.Write(tmp[:n])
-		// ── (A) Handshake: leer IMEI y ACK 0x01 ─────────────────────────────
+
+		// (A) Handshake IMEI
 		if st.imei == "" {
 			if tryReadIMEI(&st) {
-				lg.Info("handshake OK", "imei", st.imei)
-				if _, err := conn.Write([]byte{0x01}); err != nil {
-					lg.Error("handshake ack write failed", "err", err)
-					return
-				}
-				// Marcamos ready tras handshake; enviaremos getver luego del 1er ACK AVL
+				lg.Info("handshake OK", "remote", conn.RemoteAddr().String(), "imei", st.imei)
+				_, _ = conn.Write([]byte{0x01}) // ACK handshake
 				st.ready = true
+				st.sessionOpen = time.Now()
 			} else {
-				// Aún no hay suficientes bytes para IMEI; leer más del socket
-				continue
+				continue // espera más bytes
 			}
 		}
-		// ── (B) Extraer frames: Codec12 primero, luego AVL ──────────────────
+
+		// (B) Extraer frames completos
 		for {
 			pkt := tryReadAVLFrame(&st.buf)
 			if pkt == nil {
 				break
 			}
 			observability.PacketsRecv.Inc()
-			// Seguridad básica por tamaño
 			if len(pkt) < 13 {
 				lg.Warn("short frame", "len", len(pkt))
 				continue
 			}
 			codecID := pkt[8]
-			// (B1) Respuesta de comando (Codec 0x0C) => NO ACK
+
+			// (B1) Respuestas de comando (Codec 0x0C) → NO ACK
 			if codecID == 0x0C {
 				if text, err := codec.ParseCodec12Response(pkt); err == nil {
 					dispatcher.HandleGetVerResponse(st.imei, text)
@@ -96,14 +97,12 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 				lg.Warn("codec12: frame not parsed")
 				continue
 			}
-			// (B2) AVL (Codec 0x08/0x8E): despachar y ACK dinámico (= Qty1)
+
+			// (B2) AVL (0x08/0x8E) → despachar y ACK Qty1
 			if codecID == 0x08 || codecID == 0x8E {
-				if len(pkt) < 10 {
-					lg.Warn("bad avl frame (len)", "len", len(pkt))
-					continue
-				}
-				qty1 := int(pkt[9]) // Qty1 va justo después del CodecID
+				qty1 := int(pkt[9]) // Number of Data 1
 				go dispatcher.ProcessIncoming(st.imei, pkt)
+
 				var ack [4]byte
 				binary.BigEndian.PutUint32(ack[:], uint32(qty1))
 				if _, err := conn.Write(ack[:]); err != nil {
@@ -112,19 +111,20 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 					observability.RecordsAck.Inc()
 					firstAVLACK = true
 				}
-				// (B3) Tras el primer ACK AVL, enviar getver una sola vez
+
+				// (B3) Enviar getver una sola vez después del 1er ACK AVL
 				if st.ready && firstAVLACK && !st.sentGetVer {
 					p := codec.BuildCodec12("getver")
 					if _, err := conn.Write(p); err == nil {
 						st.sentGetVer = true
-						lg.Info("sent getver", "imei", st.imei)
+						lg.Info("sent getver", "remote", conn.RemoteAddr().String(), "imei", st.imei)
 					} else {
 						lg.Warn("send getver failed", "err", err)
 					}
 				}
 				continue
 			}
-			// (B4) Otros codecs: sólo log
+
 			lg.Warn("unknown codec", "id", fmt.Sprintf("0x%02X", codecID))
 		}
 	}

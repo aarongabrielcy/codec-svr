@@ -4,19 +4,6 @@ import (
 	"fmt"
 )
 
-type TrackingObject struct {
-	IMEI       string            `json:"imei"`
-	Datetime   string            `json:"datetime"`
-	Latitude   float64           `json:"latitud"`
-	Longitude  float64           `json:"longitud"`
-	Speed      int               `json:"speed"`
-	Course     int               `json:"course"`
-	Satellites int               `json:"satellites"`
-	Inputs     map[string]int    `json:"inputs"`
-	Outputs    map[string]int    `json:"outputs"`
-	Extras     map[string]uint64 `json:"extras"`
-}
-
 func BuildTrackingFromStates(
 	imei string,
 	timestamp any,
@@ -143,9 +130,11 @@ func BuildTrackingFromStates(
 }*/
 
 func ToGRPC(tr *TrackingObject) []string {
-	// Aquí conviertes a tu mensaje gRPC real; de momento, devolvemos una sola línea JSON-like
-	out := fmt.Sprintf(`{"imei":"%s","dt":"%s","lat":%.6f,"lon":%.6f,"spd":%d,"crs":%d,"sats":%d,"in":%v,"out":%v,"Ext":%v}`,
-		tr.IMEI, tr.Datetime, tr.Latitude, tr.Longitude, tr.Speed, tr.Course, tr.Satellites, tr.Inputs, tr.Outputs, tr.Extras)
+	out := fmt.Sprintf(
+		`{"imei":"%s","dt":"%s","lat":%.6f,"lon":%.6f,"spd":%d,"crs":%d,"sats":%d,"in":%v,"out":%v,"Ext":%v,"msg_type":"%s","model":"%s","fw_ver":"%s"}`,
+		tr.IMEI, tr.Datetime, tr.Latitude, tr.Longitude, tr.Speed, tr.Course, tr.Satellites, tr.Inputs, tr.Outputs, tr.Extras,
+		tr.MsgType, tr.Model, tr.FWVer,
+	)
 	return []string{out}
 }
 
