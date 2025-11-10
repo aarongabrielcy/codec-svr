@@ -17,28 +17,27 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 	if len(frame) < 12 {
 		return nil, fmt.Errorf("frame too short")
 	}
-
-	// --- encabezado general ---
-	off += 4 // preamble
+	// --- preámbulo + dataLen ---
+	off += 4
 	dataLen := int(binary.BigEndian.Uint32(frame[off : off+4]))
 	off += 4
 	if off+dataLen+4 > len(frame) {
 		return nil, fmt.Errorf("declared len exceeds buffer")
 	}
 
+	// --- payload ---
 	codec := frame[off]
 	off++
 	if codec != 0x8E {
 		return nil, fmt.Errorf("codec 0x%X != 0x8E", codec)
 	}
-	n1 := int(frame[off]) // Number of Data 1
+	n1 := int(frame[off]) // Number of Data 1 (records)
 	off++
-
 	if n1 <= 0 {
 		return nil, fmt.Errorf("no records")
 	}
 
-	// Helpers de lectura desde frame con control de límites
+	// Helpers con control de límites
 	readU8 := func() (uint8, error) {
 		if off+1 > len(frame) {
 			return 0, fmt.Errorf("oob u8")
@@ -72,7 +71,7 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 		return v, nil
 	}
 
-	// Variables para devolver (del último record)
+	// Variables del ÚLTIMO record (el más reciente) para devolver en el map
 	var (
 		ts       int64
 		priority uint8
@@ -87,9 +86,9 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 		ioVals  map[uint16]ioItem
 	)
 
-	// --- Recorrer TODOS los records (para no romper el offset) ---
+	// --- Recorrer TODOS los records ---
 	for r := 0; r < n1; r++ {
-		// Timestamp (8B, ms)
+		// Timestamp (8B, ms since epoch)
 		u64, err := readU64()
 		if err != nil {
 			return nil, err
@@ -153,12 +152,11 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 		}
 		totalIO = u16
 
-		// Repositorio de IO de este record
+		// Grupos de IO (EN 8E: los CONTADORES son uint16)
 		ioThis := map[uint16]ioItem{}
 
-		// Grupos: para 8E, el "count" es 1B; el ID es 2B
 		// 1-byte values
-		cnt1, err := readU8()
+		cnt1, err := readU16()
 		if err != nil {
 			return nil, err
 		}
@@ -167,15 +165,15 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 			if err != nil {
 				return nil, err
 			}
-			v, err := readU8()
+			v8, err := readU8()
 			if err != nil {
 				return nil, err
 			}
-			ioThis[id] = ioItem{Size: 1, Val: uint64(v)}
+			ioThis[id] = ioItem{Size: 1, Val: uint64(v8)}
 		}
 
 		// 2-byte values
-		cnt2, err := readU8()
+		cnt2, err := readU16()
 		if err != nil {
 			return nil, err
 		}
@@ -184,15 +182,15 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 			if err != nil {
 				return nil, err
 			}
-			v, err := readU16()
+			v16, err := readU16()
 			if err != nil {
 				return nil, err
 			}
-			ioThis[id] = ioItem{Size: 2, Val: uint64(v)}
+			ioThis[id] = ioItem{Size: 2, Val: uint64(v16)}
 		}
 
 		// 4-byte values
-		cnt4, err := readU8()
+		cnt4, err := readU16()
 		if err != nil {
 			return nil, err
 		}
@@ -201,15 +199,15 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 			if err != nil {
 				return nil, err
 			}
-			v, err := readU32()
+			v32, err := readU32()
 			if err != nil {
 				return nil, err
 			}
-			ioThis[id] = ioItem{Size: 4, Val: uint64(v)}
+			ioThis[id] = ioItem{Size: 4, Val: uint64(v32)}
 		}
 
 		// 8-byte values
-		cnt8, err := readU8()
+		cnt8, err := readU16()
 		if err != nil {
 			return nil, err
 		}
@@ -218,15 +216,15 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 			if err != nil {
 				return nil, err
 			}
-			v, err := readU64()
+			v64, err := readU64()
 			if err != nil {
 				return nil, err
 			}
-			ioThis[id] = ioItem{Size: 8, Val: v}
+			ioThis[id] = ioItem{Size: 8, Val: v64}
 		}
 
 		// X-bytes values
-		cnx, err := readU8()
+		cnx, err := readU16()
 		if err != nil {
 			return nil, err
 		}
@@ -242,12 +240,12 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 			if off+int(l) > len(frame) {
 				return nil, fmt.Errorf("oob x-bytes payload")
 			}
-			// Omitimos el contenido; si lo necesitas, cópialo.
+			// Saltamos contenido X-bytes
 			off += int(l)
 			ioThis[id] = ioItem{Size: int(l), Val: 0}
 		}
 
-		// Mantén para devolver el ÚLTIMO record (normalmente el más reciente)
+		// Guardamos el ÚLTIMO record (normalmente el más reciente)
 		ioVals = ioThis
 	}
 
@@ -268,7 +266,7 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 	crc := hex.EncodeToString(frame[off : off+4])
 	off += 4
 
-	// Construir resultado con el ÚLTIMO record
+	// Resultado con el ÚLTIMO record
 	result := map[string]interface{}{
 		"codec_id":    int(codec),
 		"records":     n1,
@@ -285,6 +283,5 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 		"crc":         crc,
 		"io":          ioVals,
 	}
-
 	return result, nil
 }
