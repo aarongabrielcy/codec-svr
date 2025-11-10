@@ -18,6 +18,10 @@ import (
 var previousStates = make(map[string]map[string]int)
 
 func ProcessIncoming(imei string, frame []byte) {
+	isBatch := false
+	if len(frame) >= 10 && (frame[8] == 0x08 || frame[8] == 0x8E) {
+		isBatch = int(frame[9]) > 1 // Qty1 > 1
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Printf("[PANIC RECOVER] %v\n%s\n", r, string(debug.Stack()))
@@ -46,6 +50,29 @@ func ProcessIncoming(imei string, frame []byte) {
 		toIntAny(parsed["speed"]),
 		toIntAny(parsed["satellites"]),
 	)
+	const bufferWindow = 120 * time.Second
+
+	// determinar timestamp como time.Time (puede venir como time.Time o string RFC3339)
+	var recTS time.Time
+	if ts, ok := parsed["timestamp"].(time.Time); ok {
+		recTS = ts
+	} else if s, ok := parsed["timestamp"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			recTS = t
+		}
+	}
+
+	// msgType por batch/antigüedad
+	msgType := "live"
+	if isBatch {
+		msgType = "buffer"
+	} else if !recTS.IsZero() && time.Since(recTS) > bufferWindow {
+		msgType = "buffer"
+	}
+
+	// obtener modelo y fw desde Redis (si ya los guardó HandleGetVerResponse)
+	model := store.GetStringSafe("dev:" + imei + ":model")
+	fwVer := store.GetStringSafe("dev:" + imei + ":fw")
 
 	// 1) Normalizar IOs a map[int]int
 	ioMap := extractIOIntMap(parsed["io"])
@@ -143,7 +170,9 @@ func ProcessIncoming(imei string, frame []byte) {
 		state,
 	)
 	lg := observability.NewLogger()
-
+	tr.MsgType = msgType
+	tr.Model = model
+	tr.FWVer = fwVer
 	msgs := pipeline.ToGRPC(tr)
 	for _, m := range msgs {
 		lg.Info("gRPC payload", "imei", tr.IMEI, "payload", m)
