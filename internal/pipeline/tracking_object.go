@@ -9,6 +9,7 @@ type TrackingObject struct {
 	Speed      int               `json:"speed"`
 	Course     int               `json:"course"`
 	Satellites int               `json:"satellites"`
+	Fix        int               `json:"fix"`
 	Inputs     map[string]int    `json:"inputs"`
 	Outputs    map[string]int    `json:"outputs"`
 	Extras     map[string]uint64 `json:"extras"`
