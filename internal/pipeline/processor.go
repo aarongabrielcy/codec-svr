@@ -4,13 +4,7 @@ import (
 	"fmt"
 )
 
-func BuildTrackingFromStates(
-	imei string,
-	timestamp any,
-	lat, lon float64,
-	speed, course, sats int,
-	state map[string]int,
-) *TrackingObject {
+func BuildTrackingFromStates(imei string, timestamp any, lat, lon float64, speed, course, sats int, state map[string]int) *TrackingObject {
 	tsStr, _ := timestamp.(string)
 	tr := &TrackingObject{
 		IMEI:       imei,

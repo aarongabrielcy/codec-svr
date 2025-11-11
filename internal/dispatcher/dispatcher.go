@@ -2,7 +2,7 @@ package dispatcher
 
 import (
 	"codec-svr/internal/codec"
-	"codec-svr/internal/codec/fmc125"
+	"codec-svr/internal/codec/fmxxx"
 	"codec-svr/internal/observability"
 	"codec-svr/internal/pipeline"
 	"codec-svr/internal/store"
@@ -107,17 +107,17 @@ func ProcessIncoming(imei string, frame []byte) {
 		}
 	}
 
-	in1 := getValAny(ioMap, fmc125.DIn1)
-	in2 := getValAny(ioMap, fmc125.DIn2)
-	ign := getValAny(ioMap, fmc125.Ignition)
-	move := getValAny(ioMap, fmc125.Movement)
-	out1 := getValAny(ioMap, fmc125.DOut1)
-	batt := getValAny(ioMap, fmc125.BatteryVolt)   // mV
-	battPerc := getValAny(ioMap, fmc125.BattLevel) // %
-	extmv := getValAny(ioMap, fmc125.ExtVolt)      // mV
-	ain1 := getValAny(ioMap, fmc125.AIn1)          // raw
-	sleep := getValAny(ioMap, fmc125.SleepMode)
-	vehicleSpd := getValAny(ioMap, fmc125.VehicleSpeed)
+	in1 := getValAny(ioMap, fmxxx.DIn1)
+	in2 := getValAny(ioMap, fmxxx.DIn2)
+	ign := getValAny(ioMap, fmxxx.Ignition)
+	move := getValAny(ioMap, fmxxx.Movement)
+	out1 := getValAny(ioMap, fmxxx.DOut1)
+	batt := getValAny(ioMap, fmxxx.BatteryVolt)   // mV
+	battPerc := getValAny(ioMap, fmxxx.BattLevel) // %
+	extmv := getValAny(ioMap, fmxxx.ExtVolt)      // mV
+	ain1 := getValAny(ioMap, fmxxx.AIn1)          // raw
+	sleep := getValAny(ioMap, fmxxx.SleepMode)
+	vehicleSpd := getValAny(ioMap, fmxxx.VehicleSpeed)
 
 	setState("in1", in1)
 	setState("in2", in2)
