@@ -2,26 +2,31 @@ package dispatcher
 
 import (
 	"codec-svr/internal/codec"
-	"codec-svr/internal/codec/fmxxx"
 	"codec-svr/internal/observability"
 	"codec-svr/internal/pipeline"
 	"codec-svr/internal/store"
+	"codec-svr/internal/utilities"
+
 	"encoding/hex"
 	"fmt"
 	"reflect"
 	"runtime/debug"
 	"sort"
-	"strconv"
 	"time"
 )
 
-var previousStates = make(map[string]map[string]int)
+//var previousStates = make(map[string]map[string]int)
+
+// cache de perm IO por dispositivo para actualizar Redis SOLO si cambia
+var previousPermIO = make(map[string]map[uint16]uint64)
 
 func ProcessIncoming(imei string, frame []byte) {
+	// Detectar batch (Qty1 > 1)
 	isBatch := false
 	if len(frame) >= 10 && (frame[8] == 0x08 || frame[8] == 0x8E) {
-		isBatch = int(frame[9]) > 1 // Qty1 > 1
+		isBatch = int(frame[9]) > 1
 	}
+
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Printf("[PANIC RECOVER] %v\n%s\n", r, string(debug.Stack()))
@@ -39,48 +44,41 @@ func ProcessIncoming(imei string, frame []byte) {
 		fmt.Printf("[ERROR] parsing data: %v\n", err)
 		return
 	}
-	fmt.Printf("[INFO] Parsed AVL OK: codeid=%X ts=%v prio=%v lat=%.6f lon=%.6f alt=%d ang=%d spd=%d sat=%d\n", //%X convierte decimal a Hexadecimal
-		parsed["codec_id"],
-		parsed["timestamp"],
-		parsed["priority"],
-		toFloatAny(parsed["latitude"]),
-		toFloatAny(parsed["longitude"]),
-		toIntAny(parsed["altitude"]),
-		toIntAny(parsed["angle"]),
-		toIntAny(parsed["speed"]),
-		toIntAny(parsed["satellites"]),
-	)
-	const bufferWindow = 120 * time.Second
 
-	// determinar timestamp como time.Time (puede venir como time.Time o string RFC3339)
-	var recTS time.Time
-	if ts, ok := parsed["timestamp"].(time.Time); ok {
-		recTS = ts
-	} else if s, ok := parsed["timestamp"].(string); ok {
-		if t, err := time.Parse(time.RFC3339, s); err == nil {
-			recTS = t
+	// ---- construir modelos a partir del parsed (1 record, como en tus tramas) ----
+	pkt := fromParsedToModels(parsed) // local helper (abajo)
+	rec := pkt.Records[0]
+
+	fmt.Printf("[INFO] Parsed AVL OK: codeid=%X ts=%v prio=%v lat=%.6f lon=%.6f alt=%d ang=%d spd=%d sat=%d\n",
+		pkt.CodecID,
+		rec.Timestamp.Format(time.RFC3339),
+		rec.Priority,
+		rec.GPS.Latitude, rec.GPS.Longitude,
+		rec.GPS.Altitude, rec.GPS.Angle, rec.GPS.Speed, rec.GPS.Satellites,
+	)
+
+	// ---- PERM IO: guarda en Redis SÓLO si cambian ----
+	if previousPermIO[imei] == nil {
+		previousPermIO[imei] = make(map[uint16]uint64)
+	}
+	for id, it := range rec.IO {
+		// Sólo numéricos (1/2/4/8 bytes); si Size corresponde a N bytes (X-bytes) no tiene Val útil
+		if it.Size == 1 || it.Size == 2 || it.Size == 4 || it.Size == 8 {
+			old := previousPermIO[imei][id]
+			if old != it.Val {
+				fmt.Printf("[PERMIO] %s id=%d changed %d -> %d\n", imei, id, old, it.Val)
+				previousPermIO[imei][id] = it.Val
+				store.HSetPermIO(imei, id, it.Val)
+			}
 		}
 	}
+	perm := store.HGetAllPermIO(imei) // mapa string→uint64 para el JSON
 
-	// msgType por batch/antigüedad
-	msgType := "live"
-	if isBatch {
-		msgType = "buffer"
-	} else if !recTS.IsZero() && time.Since(recTS) > bufferWindow {
-		msgType = "buffer"
-	}
-
-	// obtener modelo y fw desde Redis (si ya los guardó HandleGetVerResponse)
-	model := store.GetStringSafe("dev:" + imei + ":model")
-	fwVer := store.GetStringSafe("dev:" + imei + ":fw")
-
-	// 1) Normalizar IOs a map[int]int
-	ioMap := extractIOIntMap(parsed["io"])
+	// ---- tu debug IO MAP (mantener) ----
+	ioMap := extractIOIntMap(parsed["io"]) // reaprovecha tus helpers
 	if len(ioMap) == 0 {
 		fmt.Println("[WARN] no IO elements found")
 	}
-
-	// 2) Debug ordenado
 	ids := make([]int, 0, len(ioMap))
 	for id := range ioMap {
 		ids = append(ids, id)
@@ -93,8 +91,8 @@ func ProcessIncoming(imei string, frame []byte) {
 	}
 	fmt.Println("─────────────────────────────")
 
-	// 3) Detectar cambios, persistir a Redis y llevar métricas
-	setState := func(key string, val int) {
+	// ---- tu bloque de eventos/estados (no se toca) ----
+	/*setState := func(key string, val int) {
 		if previousStates[imei] == nil {
 			previousStates[imei] = make(map[string]int)
 		}
@@ -107,17 +105,17 @@ func ProcessIncoming(imei string, frame []byte) {
 		}
 	}
 
-	in1 := getValAny(ioMap, fmxxx.DIn1)
-	in2 := getValAny(ioMap, fmxxx.DIn2)
-	ign := getValAny(ioMap, fmxxx.Ignition)
-	move := getValAny(ioMap, fmxxx.Movement)
-	out1 := getValAny(ioMap, fmxxx.DOut1)
-	batt := getValAny(ioMap, fmxxx.BatteryVolt)   // mV
-	battPerc := getValAny(ioMap, fmxxx.BattLevel) // %
-	extmv := getValAny(ioMap, fmxxx.ExtVolt)      // mV
-	ain1 := getValAny(ioMap, fmxxx.AIn1)          // raw
-	sleep := getValAny(ioMap, fmxxx.SleepMode)
-	vehicleSpd := getValAny(ioMap, fmxxx.VehicleSpeed)
+	in1 := getValAny(ioMap, fmc125.DIn1)
+	in2 := getValAny(ioMap, fmc125.DIn2)
+	ign := getValAny(ioMap, fmc125.Ignition)
+	move := getValAny(ioMap, fmc125.Movement)
+	out1 := getValAny(ioMap, fmc125.DOut1)
+	batt := getValAny(ioMap, fmc125.BatteryVolt)
+	battPerc := getValAny(ioMap, fmc125.BattLevel)
+	extmv := getValAny(ioMap, fmc125.ExtVolt)
+	ain1 := getValAny(ioMap, fmc125.AIn1)
+	sleep := getValAny(ioMap, fmc125.SleepMode)
+	vehicleSpd := getValAny(ioMap, fmc125.VehicleSpeed)
 
 	setState("in1", in1)
 	setState("in2", in2)
@@ -130,7 +128,7 @@ func ProcessIncoming(imei string, frame []byte) {
 	setState("ain1", ain1)
 	//setState("sleep", sleep)
 
-	// 4) LEER DE REDIS los valores normalizados (fuente de verdad)
+	// ---- leer estados normalizados desde Redis (tu fuente de verdad) ----
 	keys := []string{
 		fmt.Sprintf("state:%s:%s", imei, "in1"),
 		fmt.Sprintf("state:%s:%s", imei, "in2"),
@@ -143,7 +141,6 @@ func ProcessIncoming(imei string, frame []byte) {
 		fmt.Sprintf("state:%s:%s", imei, "batPerc"),
 	}
 	redisVals := store.GetStatesRedis(keys)
-	// construir un map normalizado key->int
 	state := map[string]int{
 		"in1":     redisVals[keys[0]],
 		"in2":     redisVals[keys[1]],
@@ -156,37 +153,36 @@ func ProcessIncoming(imei string, frame []byte) {
 		"batPerc": redisVals[keys[8]],
 		"sleepM":  sleep,
 		"vclSpd":  vehicleSpd,
-	}
+	}*/
 
-	// 5) Construir TrackingObject con GPS + estados de Redis y emitir por gRPC
-	tr := pipeline.BuildTrackingFromStates(
+	// ---- Construir TrackingObject NUEVO a partir de avl_models ----
+	msgType := pipeline.DecideMsgType(isBatch, rec.Timestamp)
+	model := store.GetStringSafe("dev:" + imei + ":model")
+	fw := store.GetStringSafe("dev:" + imei + ":fw")
+
+	tr := pipeline.BuildTracking(
 		imei,
-		parsed["timestamp"],
-		toFloatAny(parsed["latitude"]),
-		toFloatAny(parsed["longitude"]),
-		toIntAny(parsed["speed"]),
-		toIntAny(parsed["angle"]),
-		toIntAny(parsed["satellites"]),
-		state,
+		rec.Timestamp,
+		rec.GPS.Latitude, // ojo: lat, lon ya vienen como float64
+		rec.GPS.Longitude,
+		rec.GPS.Speed,
+		rec.GPS.Angle,
+		rec.GPS.Satellites,
+		perm,
+		msgType,
+		model, fw,
 	)
+
+	// ---- Emitir gRPC (tu formato actual) ----
 	lg := observability.NewLogger()
-	tr.MsgType = msgType
-	tr.Model = model
-	tr.FWVer = fwVer
-	msgs := pipeline.ToGRPC(tr)
-	for _, m := range msgs {
+	for _, m := range pipeline.ToGRPC(tr) {
 		lg.Info("gRPC payload", "imei", tr.IMEI, "payload", m)
 	}
 }
 
-// ------------------------- helpers -------------------------
+// ------------------------- helpers existentes -------------------------
 
-// Acepta distintos shapes que puede devolver codec.ParseCodec8E para "io" y lo convierte a map[int]int.
-// Soporta:
-//   - map[uint16]struct{ Size int; Val uint64 }  (campos exportados)
-//   - map[string]map[string]uint64               (e.g., {"size":1,"val":5})
-//   - map[string]interface{} con "val"
-//   - map[int]int / map[uint16]uint64 / etc.
+// convertidor flexible de IO (igual que tenías)
 func extractIOIntMap(ioAny interface{}) map[int]int {
 	res := make(map[int]int)
 	if ioAny == nil {
@@ -198,7 +194,6 @@ func extractIOIntMap(ioAny interface{}) map[int]int {
 	}
 	for _, mk := range rv.MapKeys() {
 		key := toInt(mk.Interface())
-
 		mv := rv.MapIndex(mk)
 		if !mv.IsValid() {
 			continue
@@ -229,7 +224,6 @@ func extractIOIntMap(ioAny interface{}) map[int]int {
 				res[key] = toInt(val)
 			}
 		default:
-			// ¿struct con campo exportado "Val"? (p.ej., ioItem{Size int; Val uint64})
 			mv := reflect.ValueOf(v)
 			if mv.Kind() == reflect.Struct {
 				f := mv.FieldByName("Val")
@@ -240,6 +234,15 @@ func extractIOIntMap(ioAny interface{}) map[int]int {
 		}
 	}
 	return res
+}
+
+func getValAny(ioMap map[int]int, ids ...int) int {
+	for _, id := range ids {
+		if val, exists := ioMap[id]; exists {
+			return val
+		}
+	}
+	return 0
 }
 
 func toInt(x interface{}) int {
@@ -265,107 +268,56 @@ func toInt(x interface{}) int {
 	case uint64:
 		return int(v)
 	case string:
-		// tratar de parsear números en string (no obligatorio aquí)
 		var n int
 		fmt.Sscanf(v, "%d", &n)
 		return n
 	default:
-		// soportar reflect.Value directo
-		rv := reflect.ValueOf(x)
-		if rv.Kind() == reflect.Uint || rv.Kind() == reflect.Uint64 || rv.Kind() == reflect.Uint32 || rv.Kind() == reflect.Uint16 || rv.Kind() == reflect.Uint8 {
-			return int(rv.Uint())
-		}
-		if rv.Kind() == reflect.Int || rv.Kind() == reflect.Int64 || rv.Kind() == reflect.Int32 || rv.Kind() == reflect.Int16 || rv.Kind() == reflect.Int8 {
-			return int(rv.Int())
-		}
 		return 0
 	}
 }
 
-func toFloat(x interface{}) float64 {
-	switch v := x.(type) {
-	case float32:
-		return float64(v)
-	case float64:
-		return v
-	default:
-		return 0
+// fromParsedToModels: mini-puente local (no cambia tu ParseCodec8E)
+func fromParsedToModels(parsed map[string]interface{}) codec.AvlPacket {
+	p := codec.AvlPacket{
+		Preamble: 0,
+		Len:      0,
+		CodecID:  uint8(toInt(parsed["codec_id"])),
+		Qty1:     uint8(toInt(parsed["records"])),
+		Qty2:     uint8(toInt(parsed["records"])),
+		CRC:      0,
 	}
-}
 
-func getValAny(ioMap map[int]int, ids ...int) int {
-	for _, id := range ids {
-		if val, exists := ioMap[id]; exists {
-			return val
+	var ts time.Time
+	if s, ok := parsed["timestamp"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, s); err == nil {
+			ts = t
 		}
 	}
-	return 0
-}
 
-func toIntAny(x interface{}) int {
-	switch v := x.(type) {
-	case int:
-		return v
-	case int8:
-		return int(v)
-	case int16:
-		return int(v)
-	case int32:
-		return int(v)
-	case int64:
-		return int(v)
-	case uint:
-		return int(v)
-	case uint8:
-		return int(v)
-	case uint16:
-		return int(v)
-	case uint32:
-		return int(v)
-	case uint64:
-		return int(v)
-	case float32:
-		return int(v)
-	case float64:
-		return int(v)
-	case string:
-		n, _ := strconv.Atoi(v)
-		return n
-	default:
-		return 0
+	gps := codec.GPSData{
+		Longitude:  utilities.ToFloatAny(parsed["longitude"]),
+		Latitude:   utilities.ToFloatAny(parsed["latitude"]),
+		Altitude:   toInt(parsed["altitude"]),
+		Angle:      toInt(parsed["angle"]),
+		Satellites: toInt(parsed["satellites"]),
+		Speed:      toInt(parsed["speed"]),
 	}
-}
 
-func toFloatAny(x interface{}) float64 {
-	switch v := x.(type) {
-	case float32:
-		return float64(v)
-	case float64:
-		return v
-	case int:
-		return float64(v)
-	case int8:
-		return float64(v)
-	case int16:
-		return float64(v)
-	case int32:
-		return float64(v)
-	case int64:
-		return float64(v)
-	case uint:
-		return float64(v)
-	case uint8:
-		return float64(v)
-	case uint16:
-		return float64(v)
-	case uint32:
-		return float64(v)
-	case uint64:
-		return float64(v)
-	case string:
-		f, _ := strconv.ParseFloat(v, 64)
-		return f
-	default:
-		return 0
+	ioModel := map[uint16]codec.IOItem{}
+	if raw, ok := parsed["io"].(map[uint16]codec.IOItem); ok {
+		for id, it := range raw {
+			ioModel[id] = codec.IOItem{Size: it.Size, Val: it.Val}
+		}
 	}
+
+	rec := codec.AVLRecord{
+		Timestamp: ts,
+		Priority:  toInt(parsed["priority"]),
+		GPS:       gps,
+		EventIOID: toInt(parsed["event_io_id"]),
+		TotalIO:   toInt(parsed["io_total"]),
+		IO:        ioModel,
+	}
+	p.Records = []codec.AVLRecord{rec}
+	return p
 }

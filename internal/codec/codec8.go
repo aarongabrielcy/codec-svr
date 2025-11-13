@@ -7,10 +7,12 @@ import (
 	"time"
 )
 
-type ioItem struct {
-	Size int
-	Val  uint64
-}
+// OJO: Usamos IOItem exportado desde avl_models.go (mismo package "codec")
+// type IOItem struct {
+// 	Size int
+// 	Val  uint64
+// 	Raw  []byte
+// }
 
 func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 	var off int
@@ -83,7 +85,7 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 
 		eventID uint16
 		totalIO uint16
-		ioVals  map[uint16]ioItem
+		ioVals  map[uint16]IOItem
 	)
 
 	// --- Recorrer TODOS los records ---
@@ -153,7 +155,7 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 		totalIO = u16
 
 		// Grupos de IO (EN 8E: los CONTADORES son uint16)
-		ioThis := map[uint16]ioItem{}
+		ioThis := map[uint16]IOItem{}
 
 		// 1-byte values
 		cnt1, err := readU16()
@@ -169,7 +171,7 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 			if err != nil {
 				return nil, err
 			}
-			ioThis[id] = ioItem{Size: 1, Val: uint64(v8)}
+			ioThis[id] = IOItem{Size: 1, Val: uint64(v8)}
 		}
 
 		// 2-byte values
@@ -186,7 +188,7 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 			if err != nil {
 				return nil, err
 			}
-			ioThis[id] = ioItem{Size: 2, Val: uint64(v16)}
+			ioThis[id] = IOItem{Size: 2, Val: uint64(v16)}
 		}
 
 		// 4-byte values
@@ -203,7 +205,7 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 			if err != nil {
 				return nil, err
 			}
-			ioThis[id] = ioItem{Size: 4, Val: uint64(v32)}
+			ioThis[id] = IOItem{Size: 4, Val: uint64(v32)}
 		}
 
 		// 8-byte values
@@ -220,7 +222,7 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 			if err != nil {
 				return nil, err
 			}
-			ioThis[id] = ioItem{Size: 8, Val: v64}
+			ioThis[id] = IOItem{Size: 8, Val: v64}
 		}
 
 		// X-bytes values
@@ -240,9 +242,12 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 			if off+int(l) > len(frame) {
 				return nil, fmt.Errorf("oob x-bytes payload")
 			}
-			// Saltamos contenido X-bytes
+			// Guardamos el contenido X-bytes en Raw por si luego lo quieres usar
+			raw := make([]byte, int(l))
+			copy(raw, frame[off:off+int(l)])
 			off += int(l)
-			ioThis[id] = ioItem{Size: int(l), Val: 0}
+
+			ioThis[id] = IOItem{Size: int(l), Raw: raw}
 		}
 
 		// Guardamos el ÚLTIMO record (normalmente el más reciente)
@@ -270,6 +275,9 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 	result := map[string]interface{}{
 		"codec_id":    int(codec),
 		"records":     n1,
+		"qty1":        n1,
+		"qty2":        n2,
+		"is_batch":    n1 > 1, // útil para msg_type=buffer
 		"timestamp":   time.UnixMilli(ts).UTC().Format(time.RFC3339),
 		"priority":    int(priority),
 		"latitude":    float64(lat) / 1e7,
@@ -281,7 +289,7 @@ func ParseCodec8E(frame []byte) (map[string]interface{}, error) {
 		"event_io_id": int(eventID),
 		"io_total":    int(totalIO),
 		"crc":         crc,
-		"io":          ioVals,
+		"io":          ioVals, // map[uint16]IOItem (tipado)
 	}
 	return result, nil
 }
