@@ -99,14 +99,14 @@ func GetStringSafe(key string) string {
 }
 
 func HSetPermIO(imei string, id uint16, val uint64) {
-	key := imei + "hash"
+	key := imei
 	field := strconv.Itoa(int(id))
 	_ = rdb.HSet(ctx, key, field, strconv.FormatUint(val, 10)).Err()
 }
 
 // Obtiene el hash completo como map[string]uint64
 func HGetAllPermIO(imei string) map[string]uint64 {
-	key := imei + "hash"
+	key := imei
 	out := map[string]uint64{}
 	m, err := rdb.HGetAll(ctx, key).Result()
 	if err != nil {
