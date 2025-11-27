@@ -1,138 +1,157 @@
 package pipeline
 
 import (
-	"fmt"
+	"encoding/json"
+	"time"
 )
 
-func BuildTrackingFromStates(imei string, timestamp any, lat, lon float64, speed, course, sats int, state map[string]int) *TrackingObject {
-	tsStr, _ := timestamp.(string)
-	tr := &TrackingObject{
-		IMEI:       imei,
-		Datetime:   tsStr,
-		Latitude:   lat,
-		Longitude:  lon,
-		Speed:      speed,
-		Course:     course,
-		Satellites: sats,
-		Inputs:     map[string]int{},
-		Outputs:    map[string]int{},
-		Extras:     map[string]uint64{},
+// ---------------- helpers de coordenadas / fix ----------------
+
+func coordsValid(lat, lon float64) bool {
+	if lat == 0 && lon == 0 {
+		return false
 	}
-	// Inputs
-	tr.Inputs["in1"] = state["in1"]
-	tr.Inputs["in2"] = state["in2"]
-	tr.Inputs["ign"] = state["ign"]
-	tr.Inputs["move"] = state["move"]
-
-	// Outputs
-	tr.Outputs["out1"] = state["out1"]
-
-	// Extras (batería %, ext volt mV, ain1 raw)
-	tr.Extras["battery_mv"] = uint64(state["batVolt"])
-	tr.Extras["ext_voltage_mv"] = uint64(state["extvolt"])
-	tr.Extras["ain1_raw"] = uint64(state["ain1"])
-	tr.Extras["battery_pct"] = uint64(state["batPerc"])
-	tr.Extras["sleep_mode"] = uint64(state["sleepM"])
-	tr.Extras["vehicle_speed"] = uint64(state["vclSpd"])
-	return tr
+	if lat < -90 || lat > 90 || lon < -180 || lon > 180 {
+		return false
+	}
+	return true
 }
 
-// ParseAVL: decodifica el paquete, llena datos básicos y retorna io map crudo
-/*func ParseAVL(imei string, frame []byte) (*TrackingObject, map[uint16]codecIoItem, error) {
-	parsed, err := codec.ParseCodec8E(frame)
-	if err != nil {
-		return nil, nil, err
+func CalcFix(sats int, lat, lon float64) int {
+	if sats > 3 && coordsValid(lat, lon) {
+		return 1
 	}
-	tr := &TrackingObject{
-		IMEI:       imei,
-		Datetime:   parsed["timestamp"].(string),
-		Latitude:   parsed["latitude"].(float64),
-		Longitude:  parsed["longitude"].(float64),
-		Speed:      parsed["speed"].(int),
-		Course:     parsed["angle"].(int),
-		Satellites: parsed["satellites"].(int),
-		Inputs:     map[string]int{},
-		Outputs:    map[string]int{},
-		Extras:     map[string]uint64{},
+	return 0
+}
+
+// msg_type: 1 = live, 0 = buffer
+func DecideMsgType(isBatch bool, ts time.Time) int {
+	if isBatch {
+		return 0
 	}
-	raw := parsed["io"].(map[uint16]codecIoItem)
-	return tr, raw, nil
-}*/
-
-// codecIoItem debe igualar el tipo en codec (ioItem)
-/*type codecIoItem struct {
-	Size int
-	Val  uint64
-}*/
-
-// DecodeIO: mapea IOs conocidos (FMC125) y guarda estados en Redis
-/*func DecodeIO(imei string, raw map[uint16]codecIoItem, tr *TrackingObject) {
-	get := func(id uint16) (codecIoItem, bool) {
-		v, ok := raw[id]
-		return v, ok
+	if !ts.IsZero() && time.Since(ts) > 120*time.Second {
+		return 0
 	}
+	return 1
+}
 
-	// Inputs/outputs típicos
-	if v, ok := get(codec.IOIn1); ok {
-		tr.Inputs["in1"] = int(v.Val)
+// ---------------- construcción de TrackingObject ----------------
+
+func BuildTracking(
+	imei string,
+	dt time.Time,
+	lat, lon float64,
+	spd, crs, sats int,
+	perm map[string]uint64,
+	msgType int,
+	model, fw string,
+) *TrackingObject {
+	return &TrackingObject{
+		IMEI:     imei,
+		Model:    model,
+		FWVer:    fw,
+		Datetime: dt.Format(time.RFC3339),
+		Lat:      lat,
+		Lon:      lon,
+		Spd:      spd,
+		Crs:      crs,
+		Sats:     sats,
+		PermIO:   perm, // plano: "239"->1, "1"->0, etc. (desde Redis)
+		MsgType:  msgType,
+		Fix:      CalcFix(sats, lat, lon),
 	}
-	if v, ok := get(codec.IOIn2); ok {
-		tr.Inputs["in2"] = int(v.Val)
-	}
+}
 
-	// Ignition / Movement / Outputs
-	if v, ok := get(codec.IOIgnition); ok {
-		tr.Inputs["ignition"] = int(v.Val)
-	} // 0|1
-	if v, ok := get(codec.IOMovement); ok {
-		tr.Inputs["movement"] = int(v.Val)
-	} // 0|1
-	if v, ok := get(codec.IOOut1); ok {
-		tr.Outputs["out1"] = int(v.Val)
-	} // 0|1 (depende config)
+// ---------------- agrupación perm_io y salida gRPC ---------------
 
-	// Battery % (1B) y External Voltage (mV)
-	if v, ok := get(codec.IOBattLevel); ok {
-		tr.Extras["battery_pct"] = v.Val
-	} // 0..100
-	if v, ok := get(codec.IOExtVolt); ok {
-		tr.Extras["ext_voltage_mv"] = v.Val
-	} // mV
-	if v, ok := get(codec.IOBatteryVolt); ok {
-		tr.Extras["battery_mv"] = v.Val
-	} // mV
-
-	// Ejemplo de AIN1
-	if v, ok := get(codec.IOAin1); ok {
-		tr.Extras["ain1_raw"] = v.Val
-	}
-	if v, ok := get(codec.IOSleepMode); ok {
-		tr.Extras["sleep_mode"] = v.Val
+// agrupa el map plano ("239"->1, "66"->12450, ...) en:
+//
+//	"perm_io": {
+//	  "n1": { "1":1, "9":43, ... },
+//	  "n2": { "24":30, "29":90, ... },
+//	  "n4": { "11":895202092, "14":4280923948, ... },
+//	  "n8": { "25":32767, ... }
+//	}
+//
+// NOTA: aquí inferimos el tamaño por el rango numérico del valor:
+//
+//	<=0xFF -> n1, <=0xFFFF -> n2, <=0xFFFFFFFF -> n4, > eso -> n8.
+func groupPermIO(perm map[string]uint64) map[string]map[string]uint64 {
+	out := map[string]map[string]uint64{
+		"n1": {},
+		"n2": {},
+		"n4": {},
+		"n8": {},
 	}
 
-	// Persistimos estados “último valor” para comparar cambios (TTL 10 min en store.SaveEventRedis)
-	save := func(key string, val int) {
-		store.SaveEventRedisSafe(fmt.Sprintf("state:%s:%s", imei, key), val)
+	for id, val := range perm {
+		switch {
+		case val <= 0xFF:
+			out["n1"][id] = val
+		case val <= 0xFFFF:
+			out["n2"][id] = val
+		case val <= 0xFFFFFFFF:
+			out["n4"][id] = val
+		default:
+			out["n8"][id] = val
+		}
 	}
 
-	for k, val := range tr.Inputs {
-		save(k, val)
+	// si algún grupo quedó vacío, lo dejamos como nil para que
+	// json.Marshal lo omita si usas ,omitempty más adelante
+	if len(out["n1"]) == 0 {
+		delete(out, "n1")
 	}
-	for k, val := range tr.Outputs {
-		save(k, val)
+	if len(out["n2"]) == 0 {
+		delete(out, "n2")
 	}
-}*/
+	if len(out["n4"]) == 0 {
+		delete(out, "n4")
+	}
+	if len(out["n8"]) == 0 {
+		delete(out, "n8")
+	}
 
+	return out
+}
+
+// ToGRPC ahora arma un JSON real usando encoding/json y
+// la agrupación anterior.
 func ToGRPC(tr *TrackingObject) []string {
-	out := fmt.Sprintf(
-		`{"imei":"%s","dt":"%s","lat":%.6f,"lon":%.6f,"spd":%d,"crs":%d,"sats":%d,"in":%v,"out":%v,"Ext":%v,"msg_type":"%s","model":"%s","fw_ver":"%s"}`,
-		tr.IMEI, tr.Datetime, tr.Latitude, tr.Longitude, tr.Speed, tr.Course, tr.Satellites, tr.Inputs, tr.Outputs, tr.Extras,
-		tr.MsgType, tr.Model, tr.FWVer,
-	)
-	return []string{out}
-}
+	type payload struct {
+		IMEI    string                       `json:"imei"`
+		DT      string                       `json:"dt"`
+		Lat     float64                      `json:"lat"`
+		Lon     float64                      `json:"lon"`
+		Spd     int                          `json:"spd"`
+		Crs     int                          `json:"crs"`
+		Sats    int                          `json:"sats"`
+		PermIO  map[string]map[string]uint64 `json:"perm_io"`
+		MsgType int                          `json:"msg_type"`
+		Fix     int                          `json:"fix"`
+		Model   string                       `json:"model,omitempty"`
+		FWVer   string                       `json:"fw_ver,omitempty"`
+	}
 
-// Ejemplo de uso en dispatcher.ProcessIncoming:
-// tr, ioRaw, err := pipeline.ParseAVL(imei, frame)
-// pipeline.DecodeIO(imei, ioRaw, tr)
-// msgs := pipeline.ToGRPC(tr)  // envíalo por tu cliente gRPC
+	pl := payload{
+		IMEI:    tr.IMEI,
+		DT:      tr.Datetime,
+		Lat:     tr.Lat,
+		Lon:     tr.Lon,
+		Spd:     tr.Spd,
+		Crs:     tr.Crs,
+		Sats:    tr.Sats,
+		PermIO:  groupPermIO(tr.PermIO),
+		MsgType: tr.MsgType,
+		Fix:     tr.Fix,
+		Model:   tr.Model,
+		FWVer:   tr.FWVer,
+	}
+
+	b, err := json.Marshal(pl)
+	if err != nil {
+		// en caso extremo, devolvemos algo mínimo para no romper el flujo
+		return []string{`{"error":"json_marshal_failed"}`}
+	}
+	return []string{string(b)}
+}
