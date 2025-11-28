@@ -52,3 +52,7 @@ func HandleGetVerResponse(imei, text string) DeviceVersion {
 
 	return dv
 }
+
+func GetCachedModel(imei string) string {
+	return store.GetStringSafe("dev:" + imei + ":model")
+}

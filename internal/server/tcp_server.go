@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"time"
 
 	"codec-svr/internal/codec"
@@ -15,11 +16,15 @@ import (
 )
 
 type connState struct {
-	imei        string
-	buf         bytes.Buffer
-	ready       bool
-	log         *slog.Logger
-	sentGetVer  bool
+	imei  string
+	buf   bytes.Buffer
+	ready bool
+	log   *slog.Logger
+
+	sentGetVer        bool
+	sentICCID         bool
+	sentICCIDFallback bool
+
 	sessionOpen time.Time
 }
 
@@ -42,6 +47,7 @@ func Start(addr string) error {
 		go handleConn(conn, lg.With("remote", conn.RemoteAddr().String()))
 	}
 }
+
 func handleConn(conn net.Conn, lg *slog.Logger) {
 	defer conn.Close()
 	var st connState
@@ -63,65 +69,93 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 		}
 		st.buf.Write(tmp[:n])
 
-		// (A) Handshake IMEI
+		// ---- Handshake IMEI ----
 		if st.imei == "" {
 			if tryReadIMEI(&st) {
-				lg.Info("handshake OK", "remote", conn.RemoteAddr().String(), "imei", st.imei)
-				_, _ = conn.Write([]byte{0x01}) // ACK handshake
+				lg.Info("handshake OK", "imei", st.imei)
+				conn.Write([]byte{0x01})
 				st.ready = true
 				st.sessionOpen = time.Now()
-			} else {
-				continue // espera más bytes
 			}
+			continue
 		}
 
-		// (B) Extraer frames completos
+		// ---- Extraer frames completos ----
 		for {
 			pkt := tryReadAVLFrame(&st.buf)
 			if pkt == nil {
 				break
 			}
+
 			observability.PacketsRecv.Inc()
 			if len(pkt) < 13 {
 				lg.Warn("short frame", "len", len(pkt))
 				continue
 			}
+
 			codecID := pkt[8]
 
-			// (B1) Respuestas de comando (Codec 0x0C) → NO ACK
+			// ---------- RESPUESTA CODEC 12 (comandos)
 			if codecID == 0x0C {
 				if text, err := codec.ParseCodec12Response(pkt); err == nil {
 					dispatcher.HandleGetVerResponse(st.imei, text)
-					continue
+					dispatcher.HandleICCIDResponse(st.imei, text)
 				}
-				lg.Warn("codec12: frame not parsed")
 				continue
 			}
 
-			// (B2) AVL (0x08/0x8E) → despachar y ACK Qty1
+			// ---------- AVL Data
 			if codecID == 0x08 || codecID == 0x8E {
-				qty1 := int(pkt[9]) // Number of Data 1
+				qty1 := int(pkt[9])
+
 				go dispatcher.ProcessIncoming(st.imei, pkt)
 
 				var ack [4]byte
 				binary.BigEndian.PutUint32(ack[:], uint32(qty1))
-				if _, err := conn.Write(ack[:]); err != nil {
-					lg.Error("ack write failed", "err", err)
-				} else {
-					observability.RecordsAck.Inc()
-					firstAVLACK = true
+				conn.Write(ack[:])
+				observability.RecordsAck.Inc()
+				firstAVLACK = true
+
+				// ---- Enviar getver una sola vez ----
+				if st.ready && firstAVLACK && !st.sentGetVer {
+					cmd := codec.BuildCodec12("getver")
+					conn.Write(cmd)
+					st.sentGetVer = true
+					lg.Info("sent getver", "imei", st.imei)
+					continue
 				}
 
-				// (B3) Enviar getver una sola vez después del 1er ACK AVL
-				if st.ready && firstAVLACK && !st.sentGetVer {
-					p := codec.BuildCodec12("getver")
-					if _, err := conn.Write(p); err == nil {
-						st.sentGetVer = true
-						lg.Info("sent getver", "remote", conn.RemoteAddr().String(), "imei", st.imei)
-					} else {
-						lg.Warn("send getver failed", "err", err)
+				// ============ LÓGICA ICCID ==============
+				if st.sentGetVer && !st.sentICCID && !st.sentICCIDFallback {
+					model := dispatcher.GetCachedModel(st.imei)
+
+					// Caso 1: modelo vacío → intentar getimeiccid
+					if model == "" {
+						cmd := codec.BuildCodec12("getimeiccid")
+						conn.Write(cmd)
+						st.sentICCID = true
+						lg.Info("sent ICCID (unknown model)", "imei", st.imei)
+						continue
 					}
+
+					ml := strings.ToLower(model)
+
+					// Caso 2: familia 650 → fallback directo
+					if strings.Contains(ml, "650") {
+						cmd := codec.BuildCodec12("getparam 219,220,221")
+						conn.Write(cmd)
+						st.sentICCIDFallback = true
+						lg.Info("sent ICCID fallback (650)", "imei", st.imei)
+						continue
+					}
+
+					// Caso 3: modelos normales → intentar getimeiccid
+					cmd := codec.BuildCodec12("getimeiccid")
+					conn.Write(cmd)
+					st.sentICCID = true
+					lg.Info("sent ICCID via getimeiccid", "imei", st.imei)
 				}
+
 				continue
 			}
 
