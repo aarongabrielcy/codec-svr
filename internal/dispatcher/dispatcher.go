@@ -84,10 +84,15 @@ func ProcessIncoming(imei string, frame []byte) {
 		if p220, ok2 := ioItems[220]; ok2 {
 			if p221, ok3 := ioItems[221]; ok3 {
 				if p219.Val != 0 && p220.Val != 0 && p221.Val != 0 {
-					iccid := decodeICCID(p219.Val, p220.Val, p221.Val)
-					if len(iccid) >= 18 {
-						store.SaveStringSafe("dev:"+imei+":iccid", iccid)
-						fmt.Printf("[ICCID] stored from AVL IO imei=%s iccid=%s\n", imei, iccid)
+					newICCID := decodeICCID(p219.Val, p220.Val, p221.Val)
+					newICCID = digitsOnly(newICCID)
+
+					if len(newICCID) >= 18 {
+						currentICCID := store.GetStringSafe("dev:" + imei + ":iccid")
+						if newICCID != currentICCID {
+							store.SaveStringSafe("dev:"+imei+":iccid", newICCID)
+							fmt.Printf("[ICCID] stored from AVL IO imei=%s iccid=%s\n", imei, newICCID)
+						}
 					}
 				}
 			}
