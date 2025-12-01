@@ -13,6 +13,7 @@ import (
 	"codec-svr/internal/codec"
 	"codec-svr/internal/dispatcher"
 	"codec-svr/internal/observability"
+	"codec-svr/internal/store"
 )
 
 type connState struct {
@@ -26,7 +27,13 @@ type connState struct {
 	sentICCIDFallback bool
 
 	sessionOpen time.Time
+
+	// --- reintentos GETVER ---
+	getVerAttempts    int
+	lastGetVerAttempt time.Time
 }
+
+// -------------------------------------------------------------------
 
 func Start(addr string) error {
 	lg := observability.NewLogger()
@@ -47,6 +54,8 @@ func Start(addr string) error {
 		go handleConn(conn, lg.With("remote", conn.RemoteAddr().String()))
 	}
 }
+
+// -------------------------------------------------------------------
 
 func handleConn(conn net.Conn, lg *slog.Logger) {
 	defer conn.Close()
@@ -80,7 +89,7 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 			continue
 		}
 
-		// ---- Extraer frames completos ----
+		// ---- Procesar frames ----
 		for {
 			pkt := tryReadAVLFrame(&st.buf)
 			if pkt == nil {
@@ -95,16 +104,22 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 
 			codecID := pkt[8]
 
-			// ---------- RESPUESTA CODEC 12 (comandos)
+			// =====================================================
+			//      RESPUESTA CODEC 12 (comandos)
+			// =====================================================
 			if codecID == 0x0C {
 				if text, err := codec.ParseCodec12Response(pkt); err == nil {
+
+					// Mantener ambas funciones que ya tenías
 					dispatcher.HandleGetVerResponse(st.imei, text)
 					dispatcher.HandleICCIDResponse(st.imei, text)
 				}
 				continue
 			}
 
-			// ---------- AVL Data
+			// =====================================================
+			//          AVL FRAME
+			// =====================================================
 			if codecID == 0x08 || codecID == 0x8E {
 				qty1 := int(pkt[9])
 
@@ -116,20 +131,20 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 				observability.RecordsAck.Inc()
 				firstAVLACK = true
 
-				// ---- Enviar getver una sola vez ----
-				if st.ready && firstAVLACK && !st.sentGetVer {
-					cmd := codec.BuildCodec12("getver")
-					conn.Write(cmd)
-					st.sentGetVer = true
-					lg.Info("sent getver", "imei", st.imei)
-					continue
+				// =====================================================
+				//      GETVER con reintentos
+				// =====================================================
+				if st.ready && firstAVLACK {
+					maybeSendGetVer(&st, conn)
 				}
 
-				// ============ LÓGICA ICCID ==============
+				// =====================================================
+				//   *** FLUJO ICCID ORIGINAL ***
+				// =====================================================
 				if st.sentGetVer && !st.sentICCID && !st.sentICCIDFallback {
 					model := dispatcher.GetCachedModel(st.imei)
 
-					// Caso 1: modelo vacío → intentar getimeiccid
+					// Caso 1: modelo desconocido → intentar getimeiccid
 					if model == "" {
 						cmd := codec.BuildCodec12("getimeiccid")
 						conn.Write(cmd)
@@ -140,7 +155,7 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 
 					ml := strings.ToLower(model)
 
-					// Caso 2: familia 650 → fallback directo
+					// Caso 2: familia 650 -> fallback directo
 					if strings.Contains(ml, "650") {
 						cmd := codec.BuildCodec12("getparam 219,220,221")
 						conn.Write(cmd)
@@ -149,7 +164,7 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 						continue
 					}
 
-					// Caso 3: modelos normales → intentar getimeiccid
+					// Caso 3: otros modelos -> getimeiccid normal
 					cmd := codec.BuildCodec12("getimeiccid")
 					conn.Write(cmd)
 					st.sentICCID = true
@@ -164,6 +179,8 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 	}
 }
 
+// -------------------------------------------------------------------
+
 func tryReadIMEI(st *connState) bool {
 	if st.buf.Len() < 2 {
 		return false
@@ -176,13 +193,16 @@ func tryReadIMEI(st *connState) bool {
 	if st.buf.Len() < 2+imeiLen {
 		return false
 	}
+
 	st.buf.Next(2)
 	imeiBytes := st.buf.Next(imeiLen)
+
 	for _, b := range imeiBytes {
 		if b < '0' || b > '9' {
 			return false
 		}
 	}
+
 	st.imei = string(imeiBytes)
 	return true
 }
@@ -210,4 +230,76 @@ func tryReadAVLFrame(buf *bytes.Buffer) []byte {
 		return nil
 	}
 	return buf.Next(frameLen)
+}
+
+// -------------------------------------------------------------------
+//              ** NUEVO: LÓGICA DE REINTENTOS GETVER **
+// -------------------------------------------------------------------
+
+func maybeSendGetVer(st *connState, conn net.Conn) {
+	const (
+		maxSessionAttempts = 3
+		minInterval        = 5 * time.Minute
+		maxDailyAttempts   = 10
+		cmdName            = "getver"
+	)
+
+	if st.imei == "" {
+		return
+	}
+
+	now := time.Now()
+
+	// 1. Si ya lo mandaste una vez, st.sentGetVer se mantiene
+	// Pero ahora lo usaremos como "primer intento enviado"
+	// y reintentos vendrán por esta función.
+
+	fw := store.GetStringSafe("dev:" + st.imei + ":fw")
+	model := store.GetStringSafe("dev:" + st.imei + ":model")
+
+	// 2. Si ya tenemos valores → no reintentar
+	if fw != "" && model != "" {
+		return
+	}
+
+	// 3. Límite por sesión
+	if st.getVerAttempts >= maxSessionAttempts {
+		st.log.Info("getver session limit reached",
+			"imei", st.imei,
+			"attempts", st.getVerAttempts)
+		return
+	}
+
+	// 4. Mínimo tiempo entre intentos
+	if !st.lastGetVerAttempt.IsZero() &&
+		now.Sub(st.lastGetVerAttempt) < minInterval {
+		return
+	}
+
+	// 5. Límite diario global por IMEI
+	allowed, dailyCount, err := store.IncDailyCmdCounter(st.imei, cmdName, maxDailyAttempts)
+	if err != nil {
+		st.log.Warn("redis counter failed for getver", "err", err)
+		return
+	}
+	if !allowed {
+		st.log.Info("daily getver limit reached",
+			"imei", st.imei,
+			"count", dailyCount)
+		return
+	}
+
+	// ---- Enviar GETVER ----
+	cmd := codec.BuildCodec12("getver")
+	conn.Write(cmd)
+
+	st.sentGetVer = true
+	st.getVerAttempts++
+	st.lastGetVerAttempt = now
+
+	st.log.Info("sent getver",
+		"imei", st.imei,
+		"session_attempt", st.getVerAttempts,
+		"daily_attempt", dailyCount,
+	)
 }
