@@ -119,6 +119,7 @@ func ProcessIncoming(imei string, frame []byte) {
 
 	model := store.GetStringSafe("dev:" + imei + ":model")
 	fw := store.GetStringSafe("dev:" + imei + ":fw")
+	iccid := store.GetStringSafe("dev:" + imei + ":iccid")
 
 	tr := pipeline.BuildTracking(
 		imei,
@@ -132,6 +133,7 @@ func ProcessIncoming(imei string, frame []byte) {
 		msgType,
 		model,
 		fw,
+		iccid,
 	)
 
 	// ---- Emitir gRPC (perm_io agrupado se hace en ToGRPC) ----

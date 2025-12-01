@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -108,11 +109,15 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 			//      RESPUESTA CODEC 12 (comandos)
 			// =====================================================
 			if codecID == 0x0C {
-				if text, err := codec.ParseCodec12Response(pkt); err == nil {
 
-					// Mantener ambas funciones que ya tenías
+				// DEBUG — ver frame RAW de las respuestas de comando
+				lg.Warn("CODEC12 RAW RESPONSE", "hex", hex.EncodeToString(pkt))
+
+				if text, err := codec.ParseCodec12Response(pkt); err == nil {
 					dispatcher.HandleGetVerResponse(st.imei, text)
 					dispatcher.HandleICCIDResponse(st.imei, text)
+				} else {
+					lg.Warn("codec12: frame not parsed", "err", err)
 				}
 				continue
 			}

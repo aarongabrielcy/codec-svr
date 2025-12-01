@@ -50,7 +50,10 @@ func HandleGetVerResponse(imei, text string) DeviceVersion {
 		store.SaveStringSafe("dev:"+imei+":model", dv.Model)
 	}
 
-	store.SaveStringSafe("dev:"+imei+":getver_raw", dv.Raw)
+	lt := strings.ToLower(dv.Raw)
+	if strings.Contains(lt, "ver:") && strings.Contains(lt, "hw:") {
+		store.SaveStringSafe("dev:"+imei+":getver_raw", dv.Raw)
+	}
 
 	fmt.Printf("[GETVER] imei=%s model=%s fw=%s\n",
 		dv.IMEI, dv.Model, dv.Firmware)
