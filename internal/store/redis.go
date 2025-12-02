@@ -119,3 +119,35 @@ func HGetAllPermIO(imei string) map[string]uint64 {
 	}
 	return out
 }
+
+// ---------------- Contador diario de comandos ----------------
+
+// IncDailyCmdCounter incrementa un contador diario para un comando (por IMEI).
+// Devuelve:
+//
+//	allowed = true  si todavía está por debajo o igual que max
+//	allowed = false si ya excedió max (pero el contador igualmente subió)
+//	current = valor actual del contador tras el INCR
+func IncDailyCmdCounter(imei, cmd string, max int) (allowed bool, current int, err error) {
+	if rdb == nil {
+		return false, 0, fmt.Errorf("redis not initialized")
+	}
+
+	today := time.Now().Format("20060102") // YYYYMMDD
+	key := fmt.Sprintf("dev:%s:cmd:%s:%s", imei, cmd, today)
+
+	val, err := rdb.Incr(ctx, key).Result()
+	if err != nil {
+		return false, 0, err
+	}
+
+	// Primer uso del día → poner TTL para que caduque solo
+	if val == 1 {
+		_ = rdb.Expire(ctx, key, 48*time.Hour).Err()
+	}
+
+	if val > int64(max) {
+		return false, int(val), nil
+	}
+	return true, int(val), nil
+}

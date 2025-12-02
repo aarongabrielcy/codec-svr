@@ -22,33 +22,45 @@ type DeviceVersion struct {
 }
 
 func HandleGetVerResponse(imei, text string) DeviceVersion {
-	ver := ""
-	hw := ""
-	ime := imei
-
-	if m := reVer.FindStringSubmatch(text); len(m) > 1 {
-		ver = strings.TrimSpace(m[1])
-	}
-	if m := reHw.FindStringSubmatch(text); len(m) > 1 {
-		hw = strings.TrimSpace(m[1])
-	}
-	if m := reIMEI.FindStringSubmatch(text); len(m) > 1 {
-		ime = strings.TrimSpace(m[1])
-	}
+	t := strings.TrimSpace(text)
 
 	dv := DeviceVersion{
-		IMEI: ime, Model: hw, Firmware: ver, Raw: text,
+		IMEI: imei,
+		Raw:  t,
 	}
-	fmt.Printf("[GETVER] imei=%s model=%s fw=%s raw=%q\n", dv.IMEI, dv.Model, dv.Firmware, dv.Raw)
 
-	// Guarda algo útil en Redis (clave por IMEI)
-	if dv.Firmware != "" {
-		store.SaveStringSafe("dev:"+dv.IMEI+":fw", dv.Firmware)
+	if m := reVer.FindStringSubmatch(t); len(m) > 1 {
+		dv.Firmware = strings.TrimSpace(m[1])
 	}
-	if dv.Model != "" {
-		store.SaveStringSafe("dev:"+dv.IMEI+":model", dv.Model)
+	if m := reHw.FindStringSubmatch(t); len(m) > 1 {
+		dv.Model = strings.TrimSpace(m[1])
 	}
-	store.SaveStringSafe("dev:"+dv.IMEI+":getver_raw", dv.Raw)
+	if m := reIMEI.FindStringSubmatch(t); len(m) > 1 {
+		dv.IMEI = strings.TrimSpace(m[1])
+	}
+
+	// Save only if different
+	if dv.Firmware != "" &&
+		dv.Firmware != store.GetStringSafe("dev:"+imei+":fw") {
+		store.SaveStringSafe("dev:"+imei+":fw", dv.Firmware)
+	}
+
+	if dv.Model != "" &&
+		dv.Model != store.GetStringSafe("dev:"+imei+":model") {
+		store.SaveStringSafe("dev:"+imei+":model", dv.Model)
+	}
+
+	lt := strings.ToLower(dv.Raw)
+	if strings.Contains(lt, "ver:") && strings.Contains(lt, "hw:") {
+		store.SaveStringSafe("dev:"+imei+":getver_raw", dv.Raw)
+	}
+
+	fmt.Printf("[GETVER] imei=%s model=%s fw=%s\n",
+		dv.IMEI, dv.Model, dv.Firmware)
 
 	return dv
+}
+
+func GetCachedModel(imei string) string {
+	return store.GetStringSafe("dev:" + imei + ":model")
 }

@@ -4,6 +4,7 @@ type TrackingObject struct {
 	IMEI     string `json:"imei"`
 	Model    string `json:"model,omitempty"`
 	FWVer    string `json:"fw_ver,omitempty"`
+	Iccid    string `json:"iccid,omitempty"`
 	Datetime string `json:"dt"`
 
 	Lat  float64 `json:"lat"`

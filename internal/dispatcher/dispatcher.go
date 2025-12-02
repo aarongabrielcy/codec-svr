@@ -79,6 +79,26 @@ func ProcessIncoming(imei string, frame []byte) {
 		}
 	}
 
+	// ---------- ICCID DESDE IO 219/220/221 (si es que vienen) ----------
+	if p219, ok1 := ioItems[219]; ok1 {
+		if p220, ok2 := ioItems[220]; ok2 {
+			if p221, ok3 := ioItems[221]; ok3 {
+				if p219.Val != 0 && p220.Val != 0 && p221.Val != 0 {
+					newICCID := decodeICCID(p219.Val, p220.Val, p221.Val)
+					newICCID = digitsOnly(newICCID)
+
+					if len(newICCID) >= 18 {
+						currentICCID := store.GetStringSafe("dev:" + imei + ":iccid")
+						if newICCID != currentICCID {
+							store.SaveStringSafe("dev:"+imei+":iccid", newICCID)
+							fmt.Printf("[ICCID] stored from AVL IO imei=%s iccid=%s\n", imei, newICCID)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Leer TODOS los perm IO de Redis (estado más reciente)
 	perm := store.HGetAllPermIO(imei) // map[string]uint64
 
@@ -104,6 +124,7 @@ func ProcessIncoming(imei string, frame []byte) {
 
 	model := store.GetStringSafe("dev:" + imei + ":model")
 	fw := store.GetStringSafe("dev:" + imei + ":fw")
+	iccid := store.GetStringSafe("dev:" + imei + ":iccid")
 
 	tr := pipeline.BuildTracking(
 		imei,
@@ -117,9 +138,10 @@ func ProcessIncoming(imei string, frame []byte) {
 		msgType,
 		model,
 		fw,
+		iccid,
 	)
 
-	// ---- Emitir gRPC en el nuevo formato (perm_io agrupado se hace en ToGRPC) ----
+	// ---- Emitir gRPC (perm_io agrupado se hace en ToGRPC) ----
 	lg := observability.NewLogger()
 	for _, m := range pipeline.ToGRPC(tr) {
 		lg.Info("gRPC payload", "imei", tr.IMEI, "payload", m)
