@@ -1,6 +1,7 @@
 package dispatcher
 
 import (
+	"codec-svr/internal/link"
 	"codec-svr/internal/store"
 	"encoding/binary"
 	"fmt"
@@ -75,6 +76,13 @@ func HandleICCIDResponse(imei, text string) {
 				if len(val) >= 18 && val != current {
 					store.SaveStringSafe("dev:"+imei+":iccid", val)
 					fmt.Printf("[ICCID] stored primary imei=%s iccid=%s (raw=%q)\n", imei, val, valRaw)
+
+					link.SendDeviceUpdate(link.DeviceInfo{
+						IMEI:  imei,
+						FWVer: store.GetStringSafe("dev:" + imei + ":fw"),
+						Model: store.GetStringSafe("dev:" + imei + ":model"),
+						ICCID: val,
+					})
 				}
 			}
 		}
@@ -108,6 +116,12 @@ func HandleICCIDResponse(imei, text string) {
 		if len(newVal) >= 18 && newVal != current {
 			store.SaveStringSafe("dev:"+imei+":iccid", newVal)
 			fmt.Printf("[ICCID] stored fallback imei=%s iccid=%s\n", imei, newVal)
+			link.SendDeviceUpdate(link.DeviceInfo{
+				IMEI:  imei,
+				FWVer: store.GetStringSafe("dev:" + imei + ":fw"),
+				Model: store.GetStringSafe("dev:" + imei + ":model"),
+				ICCID: newVal,
+			})
 		}
 	}
 }

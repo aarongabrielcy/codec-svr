@@ -2,6 +2,7 @@ package main
 
 import (
 	"codec-svr/internal/config"
+	"codec-svr/internal/link"
 	"codec-svr/internal/observability"
 	"codec-svr/internal/server"
 	"codec-svr/internal/store"
@@ -17,6 +18,7 @@ func main() {
 		logger.Error("Redis init failed", "error", err)
 		return
 	}
+	link.Init(cfg.ProxyAddr, logger)
 
 	go observability.StartMetricsServer(cfg.MetricsPort)
 

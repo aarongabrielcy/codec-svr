@@ -99,6 +99,9 @@ func GetStringSafe(key string) string {
 }
 
 func HSetPermIO(imei string, id uint16, val uint64) {
+	if rdb == nil {
+		return
+	}
 	key := imei
 	field := strconv.Itoa(int(id))
 	_ = rdb.HSet(ctx, key, field, strconv.FormatUint(val, 10)).Err()
@@ -108,6 +111,9 @@ func HSetPermIO(imei string, id uint16, val uint64) {
 func HGetAllPermIO(imei string) map[string]uint64 {
 	key := imei
 	out := map[string]uint64{}
+	if rdb == nil {
+		return out
+	}
 	m, err := rdb.HGetAll(ctx, key).Result()
 	if err != nil {
 		return out
@@ -143,7 +149,7 @@ func IncDailyCmdCounter(imei, cmd string, max int) (allowed bool, current int, e
 
 	// Primer uso del día → poner TTL para que caduque solo
 	if val == 1 {
-		_ = rdb.Expire(ctx, key, 48*time.Hour).Err()
+		_ = rdb.Expire(ctx, key, 24*time.Hour).Err() // 48h para evitar problemas de zona horaria
 	}
 
 	if val > int64(max) {

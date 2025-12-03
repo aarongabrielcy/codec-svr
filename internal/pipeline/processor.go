@@ -44,14 +44,10 @@ func BuildTracking(
 	spd, crs, sats int,
 	perm map[string]uint64,
 	msgType int,
-	model, fw, iccid string,
 
 ) *TrackingObject {
 	return &TrackingObject{
 		IMEI:     imei,
-		Model:    model,
-		FWVer:    fw,
-		Iccid:    iccid,
 		Datetime: dt.Format(time.RFC3339),
 		Lat:      lat,
 		Lon:      lon,
@@ -130,9 +126,6 @@ func ToGRPC(tr *TrackingObject) []string {
 		PermIO  map[string]map[string]uint64 `json:"perm_io"`
 		MsgType int                          `json:"msg_type"`
 		Fix     int                          `json:"fix"`
-		Model   string                       `json:"model,omitempty"`
-		FWVer   string                       `json:"fw_ver,omitempty"`
-		Iccid   string                       `json:"iccid,omitempty"`
 	}
 
 	pl := payload{
@@ -146,9 +139,6 @@ func ToGRPC(tr *TrackingObject) []string {
 		PermIO:  groupPermIO(tr.PermIO),
 		MsgType: tr.MsgType,
 		Fix:     tr.Fix,
-		Model:   tr.Model,
-		FWVer:   tr.FWVer,
-		Iccid:   tr.Iccid,
 	}
 
 	b, err := json.Marshal(pl)

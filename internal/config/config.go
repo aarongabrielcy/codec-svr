@@ -10,6 +10,7 @@ type Config struct {
 	GRPCServer        string
 	RedisAddr         string
 	GetVerOnHandshake bool
+	ProxyAddr         string
 }
 
 func Load() Config {
@@ -19,6 +20,7 @@ func Load() Config {
 		GRPCServer:        getEnv("GRPC_SERVER", "localhost:50051"),
 		RedisAddr:         getEnv("REDIS_ADDR", "localhost:6379"),
 		GetVerOnHandshake: getEnv("GETVER_ON_HANDSHAKE", "1") != "0",
+		ProxyAddr:         getEnv("PROXY_ADDR", "201.122.135.23:6100"),
 	}
 }
 

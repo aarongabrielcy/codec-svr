@@ -3,6 +3,7 @@ package dispatcher
 
 import (
 	"codec-svr/internal/codec"
+	"codec-svr/internal/link"
 	"codec-svr/internal/observability"
 	"codec-svr/internal/pipeline"
 	"codec-svr/internal/store"
@@ -92,6 +93,12 @@ func ProcessIncoming(imei string, frame []byte) {
 						if newICCID != currentICCID {
 							store.SaveStringSafe("dev:"+imei+":iccid", newICCID)
 							fmt.Printf("[ICCID] stored from AVL IO imei=%s iccid=%s\n", imei, newICCID)
+							link.SendDeviceUpdate(link.DeviceInfo{
+								IMEI:  imei,
+								FWVer: store.GetStringSafe("dev:" + imei + ":fw"),
+								Model: store.GetStringSafe("dev:" + imei + ":model"),
+								ICCID: newICCID,
+							})
 						}
 					}
 				}
@@ -122,10 +129,6 @@ func ProcessIncoming(imei string, frame []byte) {
 	// ---- Construir TrackingObject con los nuevos helpers ----
 	msgType := pipeline.DecideMsgType(isBatch, rec.Timestamp)
 
-	model := store.GetStringSafe("dev:" + imei + ":model")
-	fw := store.GetStringSafe("dev:" + imei + ":fw")
-	iccid := store.GetStringSafe("dev:" + imei + ":iccid")
-
 	tr := pipeline.BuildTracking(
 		imei,
 		rec.Timestamp,
@@ -136,9 +139,6 @@ func ProcessIncoming(imei string, frame []byte) {
 		rec.GPS.Satellites,
 		perm,
 		msgType,
-		model,
-		fw,
-		iccid,
 	)
 
 	// ---- Emitir gRPC (perm_io agrupado se hace en ToGRPC) ----
@@ -146,6 +146,7 @@ func ProcessIncoming(imei string, frame []byte) {
 	for _, m := range pipeline.ToGRPC(tr) {
 		lg.Info("gRPC payload", "imei", tr.IMEI, "payload", m)
 	}
+	link.SendTracking(tr)
 }
 
 // ------------------------- helpers -------------------------

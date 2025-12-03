@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"codec-svr/internal/link"
 	"codec-svr/internal/store"
 )
 
@@ -39,22 +40,33 @@ func HandleGetVerResponse(imei, text string) DeviceVersion {
 		dv.IMEI = strings.TrimSpace(m[1])
 	}
 
-	// Save only if different
-	if dv.Firmware != "" &&
-		dv.Firmware != store.GetStringSafe("dev:"+imei+":fw") {
+	oldFW := store.GetStringSafe("dev:" + imei + ":fw")
+	oldModel := store.GetStringSafe("dev:" + imei + ":model")
+
+	// Guardar sólo si cambiaron
+	changed := false
+
+	if dv.Firmware != "" && dv.Firmware != oldFW {
 		store.SaveStringSafe("dev:"+imei+":fw", dv.Firmware)
+		changed = true
 	}
-
-	if dv.Model != "" &&
-		dv.Model != store.GetStringSafe("dev:"+imei+":model") {
+	if dv.Model != "" && dv.Model != oldModel {
 		store.SaveStringSafe("dev:"+imei+":model", dv.Model)
+		changed = true
 	}
 
-	lt := strings.ToLower(dv.Raw)
-	if strings.Contains(lt, "ver:") && strings.Contains(lt, "hw:") {
-		store.SaveStringSafe("dev:"+imei+":getver_raw", dv.Raw)
+	// Siempre mantener el raw original de GETVER
+	store.SaveStringSafe("dev:"+imei+":getver_raw", dv.Raw)
+	// Notificar al proxy sólo si hubo cambio relevante
+	if changed {
+		// Notificar al proxy que cambió el estado del dispositivo
+		link.SendDeviceUpdate(link.DeviceInfo{
+			IMEI:  imei,
+			FWVer: dv.Firmware,
+			Model: dv.Model,
+			ICCID: store.GetStringSafe("dev:" + imei + ":iccid"),
+		})
 	}
-
 	fmt.Printf("[GETVER] imei=%s model=%s fw=%s\n",
 		dv.IMEI, dv.Model, dv.Firmware)
 

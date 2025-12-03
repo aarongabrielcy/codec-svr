@@ -3,16 +3,17 @@ package server
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
 	"codec-svr/internal/codec"
 	"codec-svr/internal/dispatcher"
+	"codec-svr/internal/link"
 	"codec-svr/internal/observability"
 	"codec-svr/internal/store"
 )
@@ -86,6 +87,21 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 				conn.Write([]byte{0x01})
 				st.ready = true
 				st.sessionOpen = time.Now()
+
+				// -------- device_connect hacia el proxy --------
+				host, portStr, _ := net.SplitHostPort(conn.RemoteAddr().String())
+				port, _ := strconv.Atoi(portStr)
+
+				info := link.DeviceInfo{
+					IMEI:       st.imei,
+					FWVer:      store.GetStringSafe("dev:" + st.imei + ":fw"),
+					Model:      store.GetStringSafe("dev:" + st.imei + ":model"),
+					ICCID:      store.GetStringSafe("dev:" + st.imei + ":iccid"),
+					RemoteIP:   host,
+					RemotePort: port,
+					State:      link.DeviceStateConnect,
+				}
+				link.SendDeviceConnect(info)
 			}
 			continue
 		}
@@ -111,7 +127,7 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 			if codecID == 0x0C {
 
 				// DEBUG — ver frame RAW de las respuestas de comando
-				lg.Warn("CODEC12 RAW RESPONSE", "hex", hex.EncodeToString(pkt))
+				//lg.Warn("CODEC12 RAW RESPONSE", "hex", hex.EncodeToString(pkt))
 
 				if text, err := codec.ParseCodec12Response(pkt); err == nil {
 					dispatcher.HandleGetVerResponse(st.imei, text)
