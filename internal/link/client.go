@@ -2,6 +2,7 @@ package link
 
 import (
 	"bufio"
+	"codec-svr/internal/pipeline"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,21 +10,27 @@ import (
 	"net"
 	"sync"
 	"time"
-
-	"codec-svr/internal/pipeline"
 )
 
-// Configuración del link
+/* -------------------------------------------------------
+   VARIABLES GLOBALES
+---------------------------------------------------------*/
+
 var (
 	proxyAddr string
 	logger    *slog.Logger
 
 	mu   sync.Mutex
 	conn net.Conn
+
+	// buffer SOLO para connect & update
+	pending []interface{}
 )
 
-// Init arranca el cliente TCP hacia socket-tcp-proxy.
-// Si addr == "", deja el link deshabilitado.
+/* -------------------------------------------------------
+   INIT
+---------------------------------------------------------*/
+
 func Init(addr string, lg *slog.Logger) {
 	proxyAddr = addr
 	if proxyAddr == "" {
@@ -35,9 +42,9 @@ func Init(addr string, lg *slog.Logger) {
 	go connectLoop()
 }
 
-// -------------------------------------------------------------------
-//                        LOOP DE CONEXIÓN
-// -------------------------------------------------------------------
+/* -------------------------------------------------------
+   CONEXIÓN & RECONEXIÓN
+---------------------------------------------------------*/
 
 func connectLoop() {
 	for {
@@ -51,17 +58,23 @@ func connectLoop() {
 		}
 
 		setConn(c)
+
 		if logger != nil {
 			logger.Info("link: connected", "remote", c.RemoteAddr().String())
 		}
 
-		// leer en este hilo hasta que se caiga
+		// Enviar pendientes apenas se establezca la conexión
+		flushPending()
+
+		// Leer hasta que se caiga
 		readLoop(c)
 
 		clearConn(c)
+
 		if logger != nil {
 			logger.Warn("link: connection closed, reconnecting...")
 		}
+
 		time.Sleep(2 * time.Second)
 	}
 }
@@ -87,53 +100,84 @@ func getConn() net.Conn {
 	return conn
 }
 
-// -------------------------------------------------------------------
-//                           LECTURA
-// -------------------------------------------------------------------
+/* -------------------------------------------------------
+   PENDING BUFFER
+---------------------------------------------------------*/
+
+func addPending(v interface{}) {
+	mu.Lock()
+	defer mu.Unlock()
+	pending = append(pending, v)
+}
+
+// Envía todos los mensajes pendientes cuando el link se conecta.
+func flushPending() {
+	mu.Lock()
+	toSend := pending
+	pending = nil
+	mu.Unlock()
+
+	for _, msg := range toSend {
+		if err := sendNDJSON(msg); err != nil {
+			// si falla otra vez → lo regresamos al pending
+			addPending(msg)
+			if logger != nil {
+				logger.Warn("link: pending resend failed, re-buffered", "err", err)
+			}
+		}
+	}
+}
+
+/* -------------------------------------------------------
+   LECTURA DESDE PROXY
+---------------------------------------------------------*/
 
 func readLoop(c net.Conn) {
-	r := bufio.NewScanner(c)
-	for r.Scan() {
-		line := r.Bytes()
-		handleIncomingLine(line)
+	sc := bufio.NewScanner(c)
+
+	for sc.Scan() {
+		line := sc.Bytes()
+		handleIncoming(line)
 	}
-	if err := r.Err(); err != nil && err != io.EOF {
+
+	if err := sc.Err(); err != nil && err != io.EOF {
 		if logger != nil {
 			logger.Warn("link: read error", "err", err)
 		}
 	}
 }
 
-// Por ahora sólo logueamos lo que llega del proxy.
-// Más adelante aquí puedes rutear comandos hacia dispatcher / server.
-func handleIncomingLine(line []byte) {
+func handleIncoming(line []byte) {
 	if logger != nil {
-		logger.Info("link: incoming line", "line", string(line))
+		logger.Info("link: incoming", "line", string(line))
 	}
+	// en futuro: ruteo hacia dispatcher/server
 }
 
-// -------------------------------------------------------------------
-//                          ENVÍO NDJSON
-// -------------------------------------------------------------------
+/* -------------------------------------------------------
+   ENVÍO NDJSON
+---------------------------------------------------------*/
 
 func sendNDJSON(v interface{}) error {
 	c := getConn()
 	if c == nil {
+		addPending(v)
 		return fmt.Errorf("link: not connected")
 	}
+
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
+
 	_, err = c.Write(append(b, '\n'))
 	return err
 }
 
-// -------------------------------------------------------------------
-//          PAYLOADS DE ALTO NIVEL HACIA EL PROXY (NDJSON)
-// -------------------------------------------------------------------
+/* -------------------------------------------------------
+   PAYLOADS
+---------------------------------------------------------*/
 
-// device_connect
 type deviceConnectPayload struct {
 	DeviceConnect bool   `json:"device_connect"`
 	IMEI          string `json:"imei"`
@@ -144,7 +188,6 @@ type deviceConnectPayload struct {
 	RemotePort    int    `json:"remote_port,omitempty"`
 }
 
-// device_update
 type deviceUpdatePayload struct {
 	DeviceUpdate bool   `json:"device_update"`
 	IMEI         string `json:"imei"`
@@ -153,18 +196,17 @@ type deviceUpdatePayload struct {
 	ICCID        string `json:"iccid,omitempty"`
 }
 
-// tracking (reutilizamos TrackingObject y su formato JSON actual)
 type trackingPayload = pipeline.TrackingObject
 
-// -------------------------------------------------------------------
-//                 FUNCIONES PÚBLICAS PARA EL RESTO
-// -------------------------------------------------------------------
+/* -------------------------------------------------------
+   API PÚBLICA
+---------------------------------------------------------*/
 
-// SendDeviceConnect se llama normalmente tras el handshake TCP con el GPS.
 func SendDeviceConnect(info DeviceInfo) {
 	if proxyAddr == "" {
 		return
 	}
+
 	pl := deviceConnectPayload{
 		DeviceConnect: true,
 		IMEI:          info.IMEI,
@@ -174,16 +216,17 @@ func SendDeviceConnect(info DeviceInfo) {
 		RemoteIP:      info.RemoteIP,
 		RemotePort:    info.RemotePort,
 	}
+
 	if err := sendNDJSON(pl); err != nil && logger != nil {
 		logger.Warn("link: send device_connect failed", "imei", info.IMEI, "err", err)
 	}
 }
 
-// SendDeviceUpdate se llama cuando cambian fw/model/iccid.
 func SendDeviceUpdate(info DeviceInfo) {
 	if proxyAddr == "" {
 		return
 	}
+
 	pl := deviceUpdatePayload{
 		DeviceUpdate: true,
 		IMEI:         info.IMEI,
@@ -191,16 +234,18 @@ func SendDeviceUpdate(info DeviceInfo) {
 		Model:        info.Model,
 		ICCID:        info.ICCID,
 	}
+
 	if err := sendNDJSON(pl); err != nil && logger != nil {
 		logger.Warn("link: send device_update failed", "imei", info.IMEI, "err", err)
 	}
 }
 
-// SendTracking envía el trackeo actual como NDJSON (formato TrackingObject).
 func SendTracking(tr *pipeline.TrackingObject) {
 	if proxyAddr == "" || tr == nil {
 		return
 	}
+
+	// IMPORTANTE: tracking NO se guarda en pending
 	if err := sendNDJSON((*trackingPayload)(tr)); err != nil && logger != nil {
 		logger.Warn("link: send tracking failed", "imei", tr.IMEI, "err", err)
 	}

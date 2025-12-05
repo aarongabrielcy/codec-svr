@@ -119,12 +119,12 @@ func ProcessIncoming(imei string, frame []byte) {
 		ids = append(ids, id)
 	}
 	sort.Ints(ids)
-	fmt.Println("─────────────────────────────")
+	/*fmt.Println("─────────────────────────────")
 	fmt.Printf("[DEBUG] IO MAP for IMEI %s\n", imei)
 	for _, id := range ids {
 		fmt.Printf("  • ID=%d → %d\n", id, ioMap[id])
 	}
-	fmt.Println("─────────────────────────────")
+	fmt.Println("─────────────────────────────")*/
 
 	// ---- Construir TrackingObject con los nuevos helpers ----
 	msgType := pipeline.DecideMsgType(isBatch, rec.Timestamp)

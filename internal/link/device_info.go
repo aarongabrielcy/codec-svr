@@ -1,6 +1,7 @@
 package link
 
-// DeviceInfo es la vista "estática" del dispositivo que se envía a socket
+// DeviceInfo contiene la vista "estática" del dispositivo
+// destinada a socket-tcp-proxy.
 type DeviceInfo struct {
 	IMEI       string
 	FWVer      string
