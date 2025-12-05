@@ -96,6 +96,7 @@ func handleConn(conn net.Conn, lg *slog.Logger) {
 					IMEI:       st.imei,
 					FWVer:      store.GetStringSafe("dev:" + st.imei + ":fw"),
 					Model:      store.GetStringSafe("dev:" + st.imei + ":model"),
+					Brand:      "TTKA",
 					ICCID:      store.GetStringSafe("dev:" + st.imei + ":iccid"),
 					RemoteIP:   host,
 					RemotePort: port,

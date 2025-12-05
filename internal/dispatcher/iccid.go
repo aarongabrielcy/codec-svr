@@ -81,6 +81,7 @@ func HandleICCIDResponse(imei, text string) {
 						IMEI:  imei,
 						FWVer: store.GetStringSafe("dev:" + imei + ":fw"),
 						Model: store.GetStringSafe("dev:" + imei + ":model"),
+						Brand: "TTKA",
 						ICCID: val,
 					})
 				}
@@ -120,6 +121,7 @@ func HandleICCIDResponse(imei, text string) {
 				IMEI:  imei,
 				FWVer: store.GetStringSafe("dev:" + imei + ":fw"),
 				Model: store.GetStringSafe("dev:" + imei + ":model"),
+				Brand: "TTKA",
 				ICCID: newVal,
 			})
 		}

@@ -64,6 +64,7 @@ func HandleGetVerResponse(imei, text string) DeviceVersion {
 			IMEI:  imei,
 			FWVer: dv.Firmware,
 			Model: dv.Model,
+			Brand: "TTKA",
 			ICCID: store.GetStringSafe("dev:" + imei + ":iccid"),
 		})
 	}

@@ -97,6 +97,7 @@ func ProcessIncoming(imei string, frame []byte) {
 								IMEI:  imei,
 								FWVer: store.GetStringSafe("dev:" + imei + ":fw"),
 								Model: store.GetStringSafe("dev:" + imei + ":model"),
+								Brand: "TTKA",
 								ICCID: newICCID,
 							})
 						}

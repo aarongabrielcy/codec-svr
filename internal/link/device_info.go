@@ -6,6 +6,7 @@ type DeviceInfo struct {
 	IMEI       string
 	FWVer      string
 	Model      string
+	Brand      string
 	ICCID      string
 	RemoteIP   string
 	RemotePort int

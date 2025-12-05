@@ -183,6 +183,7 @@ type deviceConnectPayload struct {
 	IMEI          string `json:"imei"`
 	FWVer         string `json:"fw_ver,omitempty"`
 	Model         string `json:"model,omitempty"`
+	Brand         string `json:"brand,omitempty"`
 	ICCID         string `json:"iccid,omitempty"`
 	RemoteIP      string `json:"remote_ip,omitempty"`
 	RemotePort    int    `json:"remote_port,omitempty"`
@@ -193,6 +194,7 @@ type deviceUpdatePayload struct {
 	IMEI         string `json:"imei"`
 	FWVer        string `json:"fw_ver,omitempty"`
 	Model        string `json:"model,omitempty"`
+	Brand        string `json:"brand,omitempty"`
 	ICCID        string `json:"iccid,omitempty"`
 }
 
@@ -212,6 +214,7 @@ func SendDeviceConnect(info DeviceInfo) {
 		IMEI:          info.IMEI,
 		FWVer:         info.FWVer,
 		Model:         info.Model,
+		Brand:         "TTKA",
 		ICCID:         info.ICCID,
 		RemoteIP:      info.RemoteIP,
 		RemotePort:    info.RemotePort,
